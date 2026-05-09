@@ -121,7 +121,7 @@ _Last updated: 2026-05-10 | Updated by: claude-code_
 |--------|--------|--------|--------------|
 | preprocessing/pipeline.py | done | feature/pretrained-model | 2026-05-09 |
 | pretrained/model.py (CNNGRUAttention) | done | feature/pretrained-model | 2026-05-09 |
-| train.py | done | feature/pretrained-model | 2026-05-09 |
+| train.py | done | feature/pretrained-model | 2026-05-10 |
 | metrics.py (FallMetrics) | done | feature/pretrained-model | 2026-05-09 |
 | augment/augment.py | done | feature/pretrained-model | 2026-05-09 |
 | model/r_pca.py | done | feature/pretrained-model | 2026-05-09 |
@@ -139,6 +139,22 @@ _Last updated: 2026-05-10 | Updated by: claude-code_
 ---
 
 ## Review Notes
+
+### 2026-05-10 — best.pt 저장 기준 변경 (recall 임계값 + F1)
+
+- 적용 커밋: `df88ef4 [수정] best.pt 저장 기준 recall 임계값 + F1 복합 기준으로 변경` (feature/pretrained-model).
+- 문제: 기존 `train.py`는 `m.fall_recall > best_recall` 단독 기준으로 best.pt를 저장. recall만 높고 FAR이 큰(오탐 많은) 모델이 best로 선정될 수 있어 D-011 성능 목표(Recall≥85%, FAR≤15%, F1≥0.85)와 정렬되지 않음.
+- 수정: `model/pretrained/train.py`에 상수 `BEST_RECALL_MIN: float = 0.90` 추가. 학습 루프에서 추적 변수를 `best_f1`, `best_recall_for_best`로 교체하고, `m.fall_recall >= BEST_RECALL_MIN` 통과 에폭 중 `m.fall_f1`이 갱신될 때만 best.pt와 best_metrics.json 저장. 미달 에폭은 last.pt만 갱신하고 안내 메시지 출력. 학습 종료 후 best.pt가 한 번도 저장되지 않은 경우(`best_f1 < 0`) 임계값 조정 안내 WARN 출력.
+- 영향 범위: 사전학습 train.py 한 파일. 캐시 파일명, 전처리, 모델 아키텍처 변경 없음.
+- 잔여 리스크: BEST_RECALL_MIN=0.90이 Stretch 목표 기준으로 잡혀있어 초기 에폭에서 best.pt가 갱신되지 않을 수 있음. 임계값 미달이 지속되면 상수만 낮춰 재학습 가능 (예: 0.85 = MVG 기준).
+
+### 2026-05-10 — Codex review: pad_short API 및 문서 보완 적용 확인
+
+- 확인 커밋: `7e343d5 [수정] pad_short API 및 문서 보완`.
+- 검토 결과: `sliding_windows()`의 `tail_window`, `pad_short`는 `*` 뒤 keyword-only 인자로 유지됨. `preprocess_directory()`에도 `pad_short: bool = False`가 추가되었고 내부 `preprocess_file(..., pad_short=pad_short)`로 정상 전달됨.
+- 문서 확인: `sliding_windows()` Returns 설명이 `pad_short=True`, `drop_last=False`, `tail_window=True` 조건별 반환 동작과 일치하도록 보완됨.
+- 잔여 리스크: 현재 로컬 시스템 Python에는 `numpy`가 없어 import 기반 런타임 검증은 실패했으며, 코드/시그니처 정적 검토 기준으로 확인함.
+
 
 ### 2026-05-10 — pad_short API 및 문서 보완 (Codex P2/P3 정리)
 
@@ -197,6 +213,8 @@ _Last updated: 2026-05-10 | Updated by: claude-code_
 | W5 | 2026-05-28 | E2E 통합, 2환경 검증 |
 | W6 | 2026-06-04 | Demo |
 | W7 | 2026-06-11 | 최종 발표 |
+
+
 
 
 
