@@ -11,7 +11,7 @@
 아래 URL의 STATE.md를 읽고 현재 프로젝트 상태를 파악한 다음 작업을 시작해줘.
 
 STATE.md: https://raw.githubusercontent.com/LeapSeeker/ai-workspace/main/projects/{project}/STATE.md
-PROTOCOL: https://raw.githubusercontent.com/LeapSeeker/ai-workspace/main/_common/PROTOCOL.md
+PROTOCOL: https://raw.githubusercontent.com/LeapSeeker/ai-workspace/main/common/PROTOCOL.md
 
 오늘 작업 내용: {작업 내용 간략 기술}
 ```
@@ -24,7 +24,7 @@ PROTOCOL: https://raw.githubusercontent.com/LeapSeeker/ai-workspace/main/_common
 아래 URL의 STATE.md를 읽고 현재 프로젝트 상태를 파악한 다음 작업을 시작해줘.
 
 STATE.md: https://raw.githubusercontent.com/LeapSeeker/ai-workspace/main/projects/{project}/STATE.md
-PROTOCOL: https://raw.githubusercontent.com/LeapSeeker/ai-workspace/main/_common/PROTOCOL.md
+PROTOCOL: https://raw.githubusercontent.com/LeapSeeker/ai-workspace/main/common/PROTOCOL.md
 GitHub repo: https://github.com/LeapSeeker/{repo-name}
 
 오늘 작업 내용: {작업 내용 간략 기술}
@@ -38,7 +38,7 @@ GitHub repo: https://github.com/LeapSeeker/{repo-name}
 아래 URL의 STATE.md를 읽고 현재 프로젝트 상태를 파악한 다음 작업을 시작해줘.
 
 STATE.md: https://raw.githubusercontent.com/LeapSeeker/ai-workspace/main/projects/{project}/STATE.md
-PROTOCOL: https://raw.githubusercontent.com/LeapSeeker/ai-workspace/main/_common/PROTOCOL.md
+PROTOCOL: https://raw.githubusercontent.com/LeapSeeker/ai-workspace/main/common/PROTOCOL.md
 GitHub repo: https://github.com/LeapSeeker/{repo-name}
 
 오늘 검토 대상: {검토할 모듈 또는 파일 경로}
