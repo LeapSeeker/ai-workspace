@@ -140,6 +140,22 @@ _Last updated: 2026-05-10 | Updated by: claude-code_
 
 ## Review Notes
 
+### 2026-05-10 — 캐시 파일명 파라미터 기반 자동 생성
+
+- 적용 커밋: `2782517 [수정] 캐시 파일명 파라미터 기반 자동 생성으로 변경` (feature/pretrained-model). 후속 커밋 `f64889f`는 codex의 학습 종료 시 best.pt 기준 요약 출력 추가를 별도 분리한 것.
+- 문제: 기존 캐시 파일명이 `dataset_cache[_e<envs>]_tail_ps.npz`로 고정이라 window_size/stride/tail_window/pad_short가 바뀌어도 같은 캐시를 재사용. 팀원이 학습을 돌리려면 매번 `--rebuild_cache`를 수동으로 붙여야 했음.
+- 수정: `model/pretrained/train.py`에 헬퍼 `_make_cache_path(cache_dir, envs, window_size, stride, tail_window, pad_short)` 추가 (상수 블록 아래, build_cache 위). 형식 `dataset_cache_e{envs}_w{ws}_s{stride}[_tail][_ps].npz`. stride=None이면 window_size 값으로 표기. 모듈 상수 `CACHE_WINDOW_SIZE/CACHE_STRIDE/CACHE_TAIL_WINDOW/CACHE_PAD_SHORT`를 source of truth로 두고 `main()`에서 `args.cache_path is None`일 때 이 헬퍼로 경로 생성. 캐시 존재 확인/로드/저장 모두 동일 경로 사용.
+- 검증: 사용자 지정 3 케이스 모두 통과 — `(envs=[1,2], w=300, s=300, tail=T, ps=T) → dataset_cache_e12_w300_s300_tail_ps.npz`, `(... tail=T, ps=F) → ...tail.npz`, `(... tail=F, ps=F) → ...npz`.
+- 영향 범위: train.py 한 파일. 전처리 코드, 모델 아키텍처, best.pt 저장 로직 변경 없음. `--rebuild_cache` 플래그 유지. 미사용 상수 `DEFAULT_CACHE_PATH`는 스코프 최소화 위해 그대로 둠 (다음 정리 시 제거 권장).
+- 후속 호환성: 기존 캐시 파일(`dataset_cache_tail_ps.npz`)은 새 명명 규칙과 매치되지 않으므로 첫 실행 시 자동 재빌드된다. 디스크에서 수동으로 옮기거나 `--cache_path`로 직접 지정하면 재사용 가능.
+
+### 2026-05-10 — Codex update: best.pt 선정 기준 문서/로그 정리
+
+- 배경: `df88ef4`에서 `best.pt` 저장 기준이 fall recall 단독 최고에서 `BEST_RECALL_MIN(0.90)` 이상 epoch 중 fall F1 최고로 변경됨.
+- Codex 조치: `model/README.txt`의 `best.pt` 설명을 새 기준으로 갱신하고, `model/pretrained/metrics.py` 사용 예시 주석을 recall 임계값 + F1 비교 기준으로 수정. `model/pretrained/train.py`는 학습 종료 시 선택된 `best.pt`의 recall/F1 기준값을 요약 출력하도록 `best_recall_for_best`를 활용.
+- 검증: `python -m py_compile model/pretrained/train.py model/pretrained/metrics.py` 통과.
+
+
 ### 2026-05-10 — best.pt 저장 기준 변경 (recall 임계값 + F1)
 
 - 적용 커밋: `df88ef4 [수정] best.pt 저장 기준 recall 임계값 + F1 복합 기준으로 변경` (feature/pretrained-model).
@@ -213,6 +229,8 @@ _Last updated: 2026-05-10 | Updated by: claude-code_
 | W5 | 2026-05-28 | E2E 통합, 2환경 검증 |
 | W6 | 2026-06-04 | Demo |
 | W7 | 2026-06-11 | 최종 발표 |
+
+
 
 
 
