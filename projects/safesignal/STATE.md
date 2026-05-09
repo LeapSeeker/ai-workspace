@@ -1,4 +1,4 @@
-# SafeSignal Project State
+﻿# SafeSignal Project State
 
 _Last updated: 2026-05-09 | Updated by: claude-code_
 
@@ -140,6 +140,25 @@ _Last updated: 2026-05-09 | Updated by: claude-code_
 
 ## Review Notes
 
+### 2026-05-09 — pad_short 옵션 추가 (window_size 미만 trial drop 방지)
+
+- 문제: Alsaify A04(standing) C02 trial은 다운샘플 후 294~299 패킷이라 W=300 미만. 기존 코드는 `n_packets < window_size`이고 `drop_last=True`이면 empty 반환 → 30 subjects × 2 envs 기준 약 240 trial이 조용히 버려짐. 기존 `tail_window`는 `n_packets >= window_size`에서만 동작해 이 문제를 해결하지 못함.
+- 수정: `sliding_windows()`에 `pad_short: bool = False` 파라미터 추가. True면 `n_packets < window_size`인 경우 `drop_last`와 무관하게 zero-padding을 뒷부분에 적용해 윈도우 1개 생성. `tail_window`와 독립적으로 동작 (전자는 짧은 trial, 후자는 긴 trial 잔여 처리).
+- 영향 범위: `model/preprocessing/window.py`, `model/preprocessing/pipeline.py` (preprocess_file, preprocess_file_full, preprocess_files_full, preprocess_directory_full, _worker_full args tuple), `model/pretrained/train.py` (build_cache에서 `pad_short=True` 추가, 캐시 파일명 `dataset_cache[_e<envs>]_tail_ps.npz`로 변경), `model/preprocessing/test_pipeline.py` (4-case 검증 추가).
+- 적용 정책: 사전학습(train.py)만 `pad_short=True`. 기본값 False 유지로 기존 호출자 호환.
+
+### 2026-05-09 — Codex review: preprocess_directory tail_window 옵션 적용 확인
+
+- 확인 커밋: `f4766ac [수정] preprocess_directory tail_window 옵션 추가`.
+- 검토 결과: `model/preprocessing/pipeline.py`의 `preprocess_directory()` 시그니처에 `tail_window: bool = False`가 추가되었고, 내부 `preprocess_file(..., tail_window=tail_window)`로 정상 전달됨. 기본값 False 유지로 기존 호출자 호환성도 보존됨.
+- 결론: 슬라이딩 윈도우 tail 보정 API 누락 항목은 해결됨.
+
+### 2026-05-09 — Codex review: sliding window tail 보정 API 일관성
+
+- 검토 결과: `sliding_windows(tail_window=True)` 구현과 `train.py` 사전학습 캐시 빌드 경로 적용은 의도대로 동작하는 구조로 확인. 400패킷 trial에서 기존 1개 윈도우만 생성되던 문제는 `amplitude[-300:]` tail 윈도우 추가로 해결됨.
+- 추가 발견: `preprocess_directory()`만 `tail_window` 인자를 노출하지 않아, RPCA 이전 윈도우-only 디버깅/분석 경로에서는 새 tail 보정 정책을 적용하지 못할 수 있음. 학습 메인 경로에는 영향 없음.
+- 제안 조치: Claude Code에서 `model/preprocessing/pipeline.py`의 `preprocess_directory()` 시그니처에 `tail_window: bool = False`를 추가하고 내부 `preprocess_file(..., tail_window=tail_window)`로 전달. 기본값 False 유지.
+
 ### 2026-05-09 — sliding window tail loss 수정
 
 - 문제: Alsaify 320Hz→100Hz 다운샘플링 시 trial당 ~400 패킷이 되는데 W=300, stride=300, drop_last=True 조합에서 윈도우 1개([0:300])만 생성되고 나머지 ~100 패킷이 버려짐.
@@ -152,6 +171,7 @@ _Last updated: 2026-05-09 | Updated by: claude-code_
 ## Pending Items
 
 - [ ] Alsaify 전체 사전학습 실행 (RTX4060 서버 수령 후)
+- [x] `preprocess_directory()`에 `tail_window` 옵션 추가 (윈도우-only 디버깅/분석 API 일관성 보완)
 - [ ] Sliding window size 실험적 결정 (데이터 수집 후)
 - [ ] 자체 수집 계획 최종 구조 확정 (W3 이전)
 - [ ] 보호자 알림 상세 시나리오 확정 (동석 담당, SOLAPI vs KakaoTalk 포함)
@@ -170,3 +190,8 @@ _Last updated: 2026-05-09 | Updated by: claude-code_
 | W5 | 2026-05-28 | E2E 통합, 2환경 검증 |
 | W6 | 2026-06-04 | Demo |
 | W7 | 2026-06-11 | 최종 발표 |
+
+
+
+
+
