@@ -1,6 +1,6 @@
 ﻿# SafeSignal Project State
 
-_Last updated: 2026-05-09 | Updated by: claude-code_
+_Last updated: 2026-05-10 | Updated by: claude-code_
 
 ---
 
@@ -139,6 +139,13 @@ _Last updated: 2026-05-09 | Updated by: claude-code_
 ---
 
 ## Review Notes
+
+### 2026-05-10 — pad_short API 및 문서 보완 (Codex P2/P3 정리)
+
+- 적용 커밋: `7e343d5 [수정] pad_short API 및 문서 보완`.
+- `model/preprocessing/pipeline.py`: `preprocess_directory()` 시그니처에 `pad_short: bool = False` 추가하고 내부 `preprocess_file(..., pad_short=pad_short)`로 전달. 윈도우-only 디버깅/분석 경로에서도 300 미만 trial 보정을 적용 가능하도록 노출. 기본값 False 유지로 기존 호출자 호환.
+- `model/preprocessing/window.py`: `sliding_windows()` Returns 설명을 실제 동작과 일치하도록 갱신. 기존 "n_packets < window_size 면 (0,…) 반환" 단일 케이스 → pad_short × drop_last 조합별 분기와 tail_window 추가 윈도우 케이스를 명시. 동작 로직과 keyword-only 설계는 변경 없음.
+- 검증: `inspect.signature`로 `tail_window`/`pad_short`가 KEYWORD_ONLY 유지, `preprocess_directory(..., pad_short=True)`가 bind OK, 위치 기반 6-인자 호출은 `TypeError` 차단 확인.
 
 ### 2026-05-09 — pad_short 옵션 추가 (window_size 미만 trial drop 방지)
 
