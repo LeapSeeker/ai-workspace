@@ -1,6 +1,6 @@
 # SafeSignal Project State
 
-_Last updated: 2026-05-09 | Updated by: claude-ai_
+_Last updated: 2026-05-09 | Updated by: claude-code_
 
 ---
 
@@ -125,6 +125,9 @@ _Last updated: 2026-05-09 | Updated by: claude-ai_
 | metrics.py (FallMetrics) | done | feature/pretrained-model | 2026-05-09 |
 | augment/augment.py | done | feature/pretrained-model | 2026-05-09 |
 | model/r_pca.py | done | feature/pretrained-model | 2026-05-09 |
+| firmware/csi_tx (ESP-IDF, 주화 작성) | ingested | feature/pretrained-model | 2026-05-09 |
+| firmware/csi_rx1 (ESP-IDF, 주화 작성) | ingested | feature/pretrained-model | 2026-05-09 |
+| firmware/csi_rx2 (ESP-IDF, 주화 작성) | ingested | feature/pretrained-model | 2026-05-09 |
 | Alsaify 전체 사전학습 (E1+E2, RTX4060) | pending | - | - |
 | UDP 수신 서버 | pending | - | - |
 | WebSocket 서버-Pi4 통신 | pending | - | - |
