@@ -140,6 +140,14 @@ _Last updated: 2026-05-10 | Updated by: claude-code_
 
 ## Review Notes
 
+### 2026-05-10 — build_cache 캐시 파라미터 실적용 동기화 (Codex 검토 반영)
+
+- 적용 커밋: `6d90fb4 [수정] build_cache가 캐시 파라미터를 실제로 적용하도록 동기화` (feature/pretrained-model).
+- 문제 (Codex 검토): `_make_cache_path()`는 `CACHE_WINDOW_SIZE/CACHE_STRIDE/CACHE_TAIL_WINDOW/CACHE_PAD_SHORT`로 파일명을 만들지만 `build_cache()` 내부 `preprocess_files_full()` 호출은 `tail_window=True, pad_short=True`만 하드코딩되어 있고 window_size/stride는 함수 기본값(WINDOW_SIZE, None)을 그대로 사용. 결과: `CACHE_STRIDE=100`으로 바꾸면 파일명은 `_s100`이 되지만 실제 전처리는 stride=300으로 돌아 캐시 자동 분리 목적이 깨짐.
+- 수정: `build_cache()` 시그니처에 `window_size/stride/tail_window/pad_short` 4개 인자 추가 (기본값은 모듈 상수 `CACHE_*`). 내부 `preprocess_files_full()` 호출에 그대로 전달. 빌드 시작 로그에 적용 파라미터를 함께 출력. `main()`에서 `build_cache()` 호출 시 `_make_cache_path()`에 넘긴 동일한 `CACHE_*` 값을 명시 전달. 미사용 상수 `DEFAULT_CACHE_PATH`도 제거 (전체 레포에 잔여 참조 없음 확인).
+- 검증: `python -m py_compile model/pretrained/train.py` 통과. `rg "DEFAULT_CACHE_PATH|dataset_cache_tail_ps"` 결과 없음. `_make_cache_path()` 4 케이스 (envs 정렬 `[2,1]→e12`, stride=None→window_size 표기, flags 조합, stride=100 변경) 전부 통과. `build_cache` 시그니처 `inspect.signature` 확인 — 4개 인자 모두 `CACHE_*` 기본값과 일치.
+- 영향 범위: train.py 한 파일. 전처리/모델/best.pt 로직, `--cache_path` 수동 지정, `--rebuild_cache` 동작 모두 보존.
+
 ### 2026-05-10 — 캐시 파일명 파라미터 기반 자동 생성
 
 - 적용 커밋: `2782517 [수정] 캐시 파일명 파라미터 기반 자동 생성으로 변경` (feature/pretrained-model). 후속 커밋 `f64889f`는 codex의 학습 종료 시 best.pt 기준 요약 출력 추가를 별도 분리한 것.
