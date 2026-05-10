@@ -113,6 +113,28 @@ _Last updated: 2026-05-11 | Updated by: claude-code_
   - 로컬 GPU: MX450 (2GB VRAM, 코드 검증용) / 학습: RTX 4060
 - **Status:** confirmed
 
+### [D-013] Rx1/Rx2 진폭 결합 방식 확정
+- **Date:** 2026-05-11
+- **Decided by:** claude-ai
+- **Content:** Rx1(52 sc)과 Rx2(52 sc)를 서브캐리어 축으로 concatenate하여 (300, 104) 단일 행렬로 구성. SDP 단계에서 서브캐리어 축을 mean 집계하므로 최종 모델 입력 (1, 28, 20)은 n_sc 변화에 무관하게 유지됨. 두 수신기의 공간 다양성(spatial diversity) 정보를 손실 없이 보존하기 위해 average(b안) 대신 concatenate(a안) 채택.
+- **Status:** confirmed
+
+### [D-014] 실시간 추론 슬라이딩 윈도우 stride 확정
+- **Date:** 2026-05-11
+- **Decided by:** claude-ai
+- **Content:** 기본 stride=100 (1초 간격 추론). stride=300은 시스템 응답 목표(≤1.5s)와 충돌 가능성, stride=30은 RPCA 연산 부하 미검증으로 기각. RTX4060에서 RPCA 단독 벤치마크(단일 윈도우 latency) 실측 후 조정. stride 값은 설정 파일 상수로 분리하여 코드 수정 없이 변경 가능하도록 구현.
+- **Pending benchmark:** RTX4060에서 window_to_model_input() 단일 호출 latency 측정 후 stride 재검토. 목표: 추론 1회 < stride 구간(stride=100이면 1s 이내).
+- **Status:** confirmed (stride 값은 실측 후 조정 예정)
+
+### [D-015] 추론 모듈 구조 확정
+- **Date:** 2026-05-11
+- **Decided by:** claude-ai
+- **Content:**
+  - 추론 전용 별도 프로세스로 분리. on_paired(rx1, rx2) 콜백은 페어 데이터를 Queue에 넣고 즉시 반환(논블로킹). InferenceWorker 프로세스가 Queue에서 꺼내 슬라이딩 윈도우 버퍼 관리 → RPCA → ACF → SDP → 모델 추론 → fall 시 결과 반환.
+  - server/dongseok 브랜치와 feature/pretrained-model 브랜치를 main으로 통합한 후 inference/ 서브모듈 신규 추가.
+  - 플로우: on_paired → Queue.put(pair) / InferenceWorker: Queue.get() → 윈도우 버퍼 → stride 조건 충족 시 전처리+추론 → fall이면 on_fall_detected() 호출.
+- **Status:** confirmed
+
 ---
 
 ## Implementation Status
@@ -135,6 +157,8 @@ _Last updated: 2026-05-11 | Updated by: claude-code_
 | fine-tuning | pending | - | - |
 | Pi4 하드웨어 버튼 인터페이스 | pending | - | - |
 | E2E 통합 테스트 | pending | - | - |
+| inference/ 모듈 (InferenceWorker) | pending | - | - |
+| main 브랜치 통합 (server + model) | pending | - | - |
 
 ---
 
@@ -242,6 +266,9 @@ _Last updated: 2026-05-11 | Updated by: claude-code_
 - [ ] ESP32 3대 배터리 런타임 정량화
 - [ ] GitHub 브랜치 전략 확정
 - [ ] 포터블 라우터 사용 가능 여부 확인
+- [ ] RTX4060에서 window_to_model_input() 단일 윈도우 latency 실측 → stride 최종 확정 (D-014 후속)
+- [ ] server/dongseok + feature/pretrained-model → main 브랜치 통합
+- [ ] inference/ 모듈 구현 (InferenceWorker, 슬라이딩 윈도우 버퍼, 결과 큐)
 
 ---
 
