@@ -1,6 +1,6 @@
 ﻿# SafeSignal Project State
 
-_Last updated: 2026-05-11 | Updated by: claude-code_
+_Last updated: 2026-05-11 (inference pipeline) | Updated by: claude-code_
 
 ---
 
@@ -157,12 +157,31 @@ _Last updated: 2026-05-11 | Updated by: claude-code_
 | fine-tuning | pending | - | - |
 | Pi4 하드웨어 버튼 인터페이스 | pending | - | - |
 | E2E 통합 테스트 | pending | - | - |
-| inference/ 모듈 (InferenceWorker) | pending | - | - |
-| main 브랜치 통합 (server + model) | pending | - | - |
+| inference/ 모듈 (InferenceWorker + FallPredictor + SlidingWindowBuffer) | done | main | 2026-05-11 |
+| main 브랜치 통합 (server/dongseok + feature/pretrained-model) | done | main | 2026-05-11 |
 
 ---
 
 ## Review Notes
+
+### 2026-05-11 — 추론 파이프라인 구현 (inference/ 모듈, server 연결, D-013~D-015)
+
+- 적용 브랜치: `main` (server/dongseok + feature/pretrained-model 병합 후 추가 구현). 코드 커밋은 별도, 이 STATE 업데이트와 분리.
+- 브랜치 통합: `git merge server/dongseok --no-ff`, 이어서 `git merge feature/pretrained-model --no-ff`. 두 병합 모두 충돌 없이 자동 병합 — `server/`는 server/dongseok이, `model/`/`collect/`/`firmware/csi_*`/`data/`는 feature/pretrained-model이 단독 보유. `server/main.py`/`server/requirements.txt`는 feature/pretrained-model 쪽이 0-byte 빈 파일이라 server/dongseok 구현이 그대로 유지됨. main에 server+model 양쪽 코드가 모두 존재.
+- 신규 디렉터리 `server/inference/`: `__init__.py`, `config.py`, `buffer.py`, `predictor.py`, `worker.py`, `_selfcheck.py`. 외부 노출은 `InferenceWorker` 만.
+- `config.py`: `WINDOW_SIZE=300`, `INFERENCE_STRIDE=100` (D-014 RTX4060 실측 전 기본값), `FALL_CLASS_IDX=0`, `FALL_THRESHOLD=0.5`, `N_SUBCARRIERS_EACH=52`. `MODEL_PATH`는 `Path(__file__).resolve().parents[2] / "model/pretrained/checkpoints/best.pt"` 절대 경로로 계산 (cwd 무관).
+- `buffer.SlidingWindowBuffer`: `deque(maxlen=300)`, `add(rx1_amp, rx2_amp)`는 Rx1(52)+Rx2(52) concat row를 append (D-013). `_since_last_predict` 초기값을 `stride` 로 설정해 버퍼가 처음 가득 차는 즉시 첫 trigger 발생, 이후 stride개 이상 추가 시 다시 trigger. `get_window()` 는 `(300, 104) float32`. 잘못된 길이 입력은 False 반환.
+- `predictor.FallPredictor`: `torch.load(model_path, map_location=device)` → `CNNGRUAttention.load_state_dict(ckpt["model"])`. `ckpt["classes"]` 길이/순서가 `model.pretrained.model.CLASSES`와 다르면 warning(7-class fine-tuned 모델 대응 여지). `predict(window: (300,104))` → `window_to_model_input` → `(1,1,28,20)` tensor → softmax → `{class, confidence, is_fall, probabilities}`. `is_fall`은 `argmax==FALL_CLASS_IDX AND fall_prob >= FALL_THRESHOLD`. sys.path에 project_root 추가하여 `model.*` import 보장.
+- `worker.InferenceWorker`: top-level은 `multiprocessing/queue`만 import (torch/RPCA import는 child process 내부 `_inference_process`에서 수행 — main process가 heavy import 부담 없음, self-check가 torch 없이 동작 가능). `mp.get_context("spawn")` (Windows 안전). `input_queue=ctx.Queue(maxsize=500)`, `put_nowait()` 큐 포화 시 드롭 카운트 로그. `get_result()`는 `queue.Empty` → None. `start()` 전에는 process 없음. child 프로세스는 `project_root`와 `server/`를 sys.path에 prepend 후 `from inference.predictor import FallPredictor` 형식으로 import, 실패 시 `from server.inference.predictor`로 fallback.
+- `server/main.py`: top-level에 있던 `RPiConnection`/`FallCooldown`/`PacketMonitor`/`PairingBuffer` 인스턴스 생성과 `pairing_buffer` 전역 생성을 모두 `main()` 함수로 이동. top-level은 None 초기화만 유지. `if __name__ == "__main__":` 첫 줄에 `multiprocessing.freeze_support()`. 콜백(`on_paired`/`on_packet_received`/`on_fall_detected`)은 top-level 정의 유지하되 객체 None 가드 추가. `on_paired()`의 기존 TODO 주석 제거하고 `inference_worker.put(rx1, rx2)` 호출. `on_fall_detected(confidence, seq_num, timestamp_us)` 시그니처로 변경 후 `rpi_connection.send_fall_alert(confidence, seq_num, timestamp_us)`에 그대로 전달. 새 `result_loop()` 스레드(50ms 폴링)가 `inference_worker.get_result()`를 처리: `is_fall=True`면 콜백 호출, `error` 키면 `log_warn`. 기존 cleanup_loop/stats_loop 동작 유지.
+- `server/ws_handler/rpi_connection.py`: `send_fall_alert(confidence=0.0, seq_num=0, timestamp_us=0)` 시그니처. 페이로드 = `{"event":"fall_detected","label":"fall","confidence":...,"seq_num":...,"timestamp_us":...}` JSON. `timestamp_us=0`이면 host wall-clock μs로 fallback (가능하면 추론 결과의 rx1 timestamp_us 사용). 기존 `"FALL_DETECTED"` 문자열 송신 제거. `import json`, `import datetime` 추가.
+- Pi4 포맷 확정: `class` 키 사용 안 함, `label` 사용 (Python/JSON 소비 측에서 `class`는 예약어 혼동 회피). D-008 본문은 `event/class/confidence/timestamp_us`로 표기되어 있고 context/SHARED.md도 일관되지 않음 — 이번 구현부터 위 JSON으로 통일. test/test_pi4_ws.py도 `if message == "FALL_DETECTED":` 문자열 비교를 `json.loads()` 후 `event=="fall_detected" AND label=="fall"` 확인으로 갱신, confidence/seq/ts 로깅 추가. Pi4 실제 수신 코드는 아직 미구현이므로 서버측 포맷이 reference.
+- `server/config/settings.py`: `SUBCARRIER_COUNT`를 64 → 52로 수정 (D-007 LLTF 기준 Rx 단일 패킷). `SUBCARRIER_COUNT_CONCAT=104` 신규 추가 (D-013 Rx1+Rx2 concat 추론 입력). 대시보드/PairingBuffer/PacketMonitor 등 기존 코드가 참조하는 키는 `device_id/seq_num/timestamp_us/n_subcarriers/amplitudes` 그대로 유지됨.
+- `server/receiver/udp_receiver.py`: 기존 `HEADER_FORMAT="<BIQH"` (15B) — n_subcarriers를 헤더에서 받는 옛 구조 → D-007 `"<BBbBIQ"` (16B header + 52f amplitude = 224B) 로 교체. `parse_packet()`은 size<224 / magic≠0xAB / device_id∉{RX1,RX2} 모두 None 반환. 반환 dict 키 (device_id/rssi/seq_num/timestamp_us/n_subcarriers=52/amplitudes(list len 52))로 downstream 호환 유지.
+- UDP 실기 수신 테스트는 이번 작업에서 수행하지 않음 (py_compile + self-check 수준). 실기 ESP32 패킷 수신 검증은 별도 진행. Implementation Status의 "UDP 수신 서버" 행은 그대로 pending 유지.
+- self-check (`server/inference/_selfcheck.py`): 4-case 모두 통과 — (1) D-007 224B 더미 패킷 parse 정상/size·magic·device_id 불일치 None / (2) SlidingWindowBuffer (300,104) shape + stride trigger 정확히 [300,400,500] / (3) MODEL_PATH `Path` 절대 경로 + 파일명 best.pt (존재 확인 안 함) / (4) InferenceWorker start() 없이 put/get_result 예외 없음. `ALL_OK` 출력. self-check는 torch/checkpoint/RPCA를 import하지 않음 — `worker.py` top-level에 predictor import가 없기 때문. _selfcheck.py 시작부에서 script dir(server/inference/)을 sys.path에서 제거해야 `server/inference/config.py` 모듈이 `server/config/` 네임스페이스 패키지를 가리지 않음(이 트릭 없으면 `from config.settings import ...` 에서 `config is not a package` 에러).
+- py_compile 검증: 9개 파일 (`server/inference/{__init__,config,buffer,predictor,worker}.py`, `server/main.py`, `server/receiver/udp_receiver.py`, `server/ws_handler/rpi_connection.py`, `server/config/settings.py`) 전부 통과.
+- 의존성 추가: `python-dotenv` (server/requirements.txt에 이미 명시되어 있었으나 로컬 환경 미설치 상태였음 → 설치). 신규 의존성 추가는 없음.
 
 ### 2026-05-11 — 자체 데이터 수집 파이프라인 (collect/) 구현
 
@@ -267,8 +286,8 @@ _Last updated: 2026-05-11 | Updated by: claude-code_
 - [ ] GitHub 브랜치 전략 확정
 - [ ] 포터블 라우터 사용 가능 여부 확인
 - [ ] RTX4060에서 window_to_model_input() 단일 윈도우 latency 실측 → stride 최종 확정 (D-014 후속)
-- [ ] server/dongseok + feature/pretrained-model → main 브랜치 통합
-- [ ] inference/ 모듈 구현 (InferenceWorker, 슬라이딩 윈도우 버퍼, 결과 큐)
+- [x] server/dongseok + feature/pretrained-model → main 브랜치 통합
+- [x] inference/ 모듈 구현 (InferenceWorker, 슬라이딩 윈도우 버퍼, 결과 큐)
 
 ---
 
