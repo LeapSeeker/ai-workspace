@@ -1,6 +1,6 @@
 ﻿# SafeSignal Project State
 
-_Last updated: 2026-05-10 | Updated by: claude-code_
+_Last updated: 2026-05-11 | Updated by: claude-code_
 
 ---
 
@@ -131,7 +131,7 @@ _Last updated: 2026-05-10 | Updated by: claude-code_
 | Alsaify 전체 사전학습 (E1+E2, RTX4060) | pending | - | - |
 | UDP 수신 서버 | pending | - | - |
 | WebSocket 서버-Pi4 통신 | pending | - | - |
-| 자체 데이터 수집 파이프라인 | pending | - | - |
+| 자체 데이터 수집 파이프라인 | done | feature/pretrained-model | 2026-05-11 |
 | fine-tuning | pending | - | - |
 | Pi4 하드웨어 버튼 인터페이스 | pending | - | - |
 | E2E 통합 테스트 | pending | - | - |
@@ -139,6 +139,23 @@ _Last updated: 2026-05-10 | Updated by: claude-code_
 ---
 
 ## Review Notes
+
+### 2026-05-11 — 자체 데이터 수집 파이프라인 (collect/) 구현
+
+- 적용 브랜치: `feature/pretrained-model` (코드 커밋은 별도, 이 STATE 업데이트와 분리).
+- 신규 파일: `collect/labels.py`, `collect/beep.py`, `collect/udp.py`, `collect/recorder.py`, `collect/collect_main.py`, `collect/_selfcheck.py`.
+- 수집 목표: D-010(240세션)에서 270세션으로 사용자 갱신 — 낙상 9종(앉/서/걷×앞/뒤/옆) ×10 = 90, 비낙상 6종(SIT_STD/LIE/WALK/STAND/RUN/PICK) ×30 = 180. `labels.ACTIVITY_INFO` 단일 source of truth, `total_target_sessions()`로 270 검증.
+- 패킷 파싱 기준: STATE.md D-007 + `firmware/csi_rx1/main/csi_rx1_main.c`, `firmware/csi_rx2/main/csi_rx2_main.c`의 `csi_packet_t` (`__attribute__((packed))`)에 정렬. 224B = `<BBbBIQ`(16B header) + `52f`(208B). `parse_packet()`은 size/magic(0xAB)/device_id(0x01|0x02) 모두 검증.
+- 페어링: `PairingBuffer`가 Rx1/Rx2 timestamp 기준 50ms 이내 가장 가까운 패킷을 pair로 확정, 200ms 미완성 만료, 버퍼 200개 cap, `threading.Lock` 보호. cleanup은 host wall-clock이 아닌 가장 최근에 본 패킷의 `timestamp_us`를 reference로 삼아 ESP↔host SNTP skew 영향 제거. UDP receiver는 `start_udp_receiver()`로 1회 실행되는 daemon thread 2개(recv, cleanup).
+- 녹화 시점: ENTER → `beep_ready()` → 3초 카운트다운 → **여기까지 CSV에 저장하지 않음** → `recorder.start_session()` → 첫 stage 직전 `beep_stage()` → stage/duration 대기 → 마지막 stage 종료 직후 `recorder.stop_session()` → `beep_end()`. 즉 ready/카운트다운 구간은 CSV에서 제외되고 실제 동작 구간만 저장.
+- CSV 컬럼 109개 고정: `timestamp_us, seq_rx{1,2}, rssi_rx{1,2}, amp_rx1_0..51, amp_rx2_0..51`. 파일명: `data/raw/E{env}_S{subj:02d}_A_{code}_T{trial:03d}.csv`. trial은 동일 (env, subject, code) 조합 파일 수 + 1 자동 증가.
+- 손실률: `(max_seq - min_seq + 1 - unique_seq_count) / (max_seq - min_seq + 1)`을 rx1/rx2 각각 계산해 max 반환. 5% 초과 시 경고 출력 후 저장 여부 사용자 선택.
+- CLI 진입점: `python collect/collect_main.py [--port 5005]`. 초기 선택은 env → subject → activity 순(스펙은 env→activity→subject지만 활동 표 완료 수가 정확하려면 subject가 먼저 정해져야 함 — 결과 동일, UX만 조정). 변경 메뉴(1.env / 2.activity / 3.subject / 4.없음 / q.종료) 루프.
+- 검증: `python -m py_compile collect/{labels,recorder,udp,beep,collect_main}.py` 통과. `python collect/_selfcheck.py` — 5개 항목(parse_packet, pairing(50ms 통과/60ms 차단/cleanup), loss_rate(0/10%/empty/single), trial 자동 증가 + CSV 컬럼 109개 순서, labels 270세션) 모두 ALL_OK. 손실률 계산은 numpy 없이 stdlib만 사용.
+- 의존성: pandas (CSV 저장), winsound (Windows 표준 — 별도 설치 불필요). 외부 설치 추가 없음.
+- 문서 불일치 명시: `context/SHARED.md`의 UDP 패킷 구조 표(magic 누락, rssi 누락, subcarrier_num 1B로 표기)는 D-007 및 실제 펌웨어와 다름. 사용자 지침에 따라 이번 작업에서는 SHARED.md 수정하지 않음. `firmware/CLAUDE.md`의 예시 구조체(`csi_packet_t`)도 magic/rssi/reserved 누락으로 펌웨어와 불일치 — 동일 사유로 미수정.
+- 범위 외: `data/collection_log.md` 자동 갱신은 사용자 요청에 따라 이번 범위 제외. `server/dongseok` 수신 서버와 동일 UDP 포트 동시 bind 시도하지 않음(독립 실행).
+- 잔여: D-010(240세션)이 STATE.md에 남아있지만 collect 구현은 270세션 기준으로 정렬됨 — D-010 본문 갱신 또는 신규 D 결정 발행은 사용자 결정 사항으로 남김.
 
 ### 2026-05-10 — build_cache 캐시 파라미터 실적용 동기화 (Codex 검토 반영)
 
