@@ -1,6 +1,6 @@
 ﻿# SafeSignal Project State
 
-_Last updated: 2026-05-11 (inference pipeline) | Updated by: claude-code_
+_Last updated: 2026-05-11 (WIFI_PS_NONE 적용 + 페어 변동성 진단) | Updated by: claude-code_
 
 ---
 
@@ -141,6 +141,15 @@ _Last updated: 2026-05-11 (inference pipeline) | Updated by: claude-code_
 - **Content:** 서버→Pi4 WebSocket 낙상 알림의 `timestamp_us`는 낙상으로 판정된 윈도우의 기준 Rx1 패킷 `timestamp_us`로 확정. 실험/성능 측정 및 서버 fall history와 같은 기준점을 유지하기 위함. 값이 0이거나 누락된 경우에만 서버 현재 시각(Unix μs)을 fallback으로 사용.
 - **Status:** confirmed
 
+### [D-017] 자체수집 무선 환경 + WIFI_PS_NONE 확정
+- **Date:** 2026-05-11
+- **Decided by:** user / claude-code (진단 결과)
+- **Content:**
+  - 자체 수집 환경: 일반 무선 공유기 미보유 → **휴대폰 핫스팟** 사용 (잠정). Windows 모바일 핫스팟(192.168.137.x ICS 대역)에서 broadcast forwarding이 매우 불안정, DTIM=3(307ms) + ESP-IDF 기본 `WIFI_PS_MIN_MODEM` 조합으로 air에 100Hz가 burst→idle 패턴으로만 나타남.
+  - TX/RX1/RX2 모든 펌웨어 `wifi_init()` 끝에 `ESP_ERROR_CHECK(esp_wifi_set_ps(WIFI_PS_NONE));` 추가. 부팅 로그에서 `pm start, type: 0` 확인.
+  - 3순위 fix (TX target `255.255.255.255` → 노트북 LAN IP `192.168.137.1` 직접 unicast)는 별도 자문 후 결정. RX는 promiscuous + `channel_filter_en=false`라 unicast 패킷도 air sniff 가능하나 무선 air-time 특성이 broadcast와 다를 수 있어 실측 필요.
+- **Status:** confirmed (PS 비활성화 적용·검증 대기), pending (unicast 전환 결정)
+
 ---
 
 ## Implementation Status
@@ -153,9 +162,9 @@ _Last updated: 2026-05-11 (inference pipeline) | Updated by: claude-code_
 | metrics.py (FallMetrics) | done | feature/pretrained-model | 2026-05-09 |
 | augment/augment.py | done | feature/pretrained-model | 2026-05-09 |
 | model/r_pca.py | done | feature/pretrained-model | 2026-05-09 |
-| firmware/csi_tx (ESP-IDF, 주화 작성) | ingested | feature/pretrained-model | 2026-05-09 |
-| firmware/csi_rx1 (ESP-IDF, 주화 작성) | ingested | feature/pretrained-model | 2026-05-09 |
-| firmware/csi_rx2 (ESP-IDF, 주화 작성) | ingested | feature/pretrained-model | 2026-05-09 |
+| firmware/csi_tx (PS 비활성화 적용) | done | main (워킹 트리) | 2026-05-11 |
+| firmware/csi_rx1 (PS 비활성화 + 디버그 카운터) | done (디버그 빌드) | main (워킹 트리) | 2026-05-11 |
+| firmware/csi_rx2 (PS 비활성화 + 디버그 카운터) | done (디버그 빌드) | main (워킹 트리) | 2026-05-11 |
 | Alsaify 전체 사전학습 (E1+E2, RTX4060) | pending | - | - |
 | UDP 수신 서버 | pending | - | - |
 | WebSocket 서버-Pi4 통신 | pending | - | - |
@@ -169,6 +178,39 @@ _Last updated: 2026-05-11 (inference pipeline) | Updated by: claude-code_
 ---
 
 ## Review Notes
+
+### 2026-05-11 — WALK 세션 페어 변동성 진단 + WIFI_PS_NONE 적용 (D-017)
+
+- **현상**: WALK(8초) 세션의 저장 페어 카운트가 24~33개로 극단적으로 낮음. STAND_T001은 485/500 (97%)로 정상이었던 환경에서 27분 후 발생.
+- **데이터 분석 (E1_S02_A_WALK_T001~T003)**:
+  - 세 파일 모두 **첫 0.31~0.32초 동안만 페어 정상 캡처** (pair_rate 77~106Hz, SNTP std 0.17~1.82). 그 후 7.7초간 페어 0개.
+  - 세션 간 RX1/RX2 seq 증가량: 평균 3~7Hz (정상 100Hz의 3~7%) → TX는 100Hz 송신 중인데 air에는 burst 형태로만 떠 있음.
+- **진단 단계**:
+  1. **TX 펌웨어 디버그 (1초당 송신 카운트)**: 35초 관측 `TX rate=100 pkt/s`, `fail=0` 완벽 유지 → TX 결백. 이후 TX 디버그 코드 원복.
+  2. **RX1 펌웨어 디버그 (단계별 카운터)**: `g_csi_total/g_csi_match/g_csi_qfull/g_udp_sent/g_udp_fail` 5개 카운터 + `stats_task` 추가. 1초마다 STATS 로그 출력.
+  3. **RX1 STATS 패턴 (디버그 빌드 첫 관측)**: cb는 50~270/s로 계속 들어오는데 match만 burst→silence 무작위 패턴 (예: 7~8s burst, 30~50s silence, 36s burst, 31s silence). 즉 RX 채널/큐/송신 모두 정상, TX 패킷만 air에서 끊김.
+  4. **RX1 부팅 로그 결정적 단서**:
+     - `connected with coin, aid = 8, channel 11` — AP "coin"이 채널 11. 코드 `DEFAULT_WIFI_CHANNEL=6`은 STA hint일 뿐 AP가 결정 → 양쪽 다 11로 점프, 일관성 문제 없음.
+     - `wifi:pm start, type: 1` — TX/RX 모두 `WIFI_PS_MIN_MODEM` (ESP-IDF 기본값) 활성. modem sleep으로 RF 주기적으로 off.
+     - `AP's beacon interval = 102400 us, DTIM period = 3` — AP가 broadcast를 약 307ms마다 forward.
+     - `sta ip: 192.168.137.72, gw: 192.168.137.1` — Windows 모바일 핫스팟 (192.168.137.x = Windows ICS 기본 대역).
+     - `WiFi 끊김 → 재연결` 로그 0건 — STA 연결 자체는 안정.
+- **원인 진단**: Windows 모바일 핫스팟의 broadcast forwarding 제약(DTIM 3 + client isolation 경향) + ESP32 `WIFI_PS_MIN_MODEM` modem sleep 조합. TX `sendto`는 100Hz 정상이지만 AP→air 단계에서 burst로만 띄움. RX는 promiscuous로 sniff하지만 자기 modem sleep 시점에 RF off되어 burst 구간만 캡처.
+- **1순위 fix 적용 (이번 세션)**:
+  - TX/RX1/RX2 세 펌웨어 모두 `wifi_init()` 끝에 한 줄 추가:
+    ```c
+    ESP_ERROR_CHECK(esp_wifi_set_ps(WIFI_PS_NONE));
+    ESP_LOGI(TAG, "WiFi Power Save 비활성화 (WIFI_PS_NONE)");
+    ```
+  - 사용자가 3개 보드 모두 빌드/플래시 완료, 부팅 로그에서 `pm start, type: 0` 및 ESP_LOGI 메시지 확인 완료.
+  - 효과 검증(WALK 재수집)은 다음 세션에서 진행 예정.
+- **다른 발견**:
+  - `csi_rx1_main.c:86`의 `wifi_event_group` 변수가 미사용 잔재 (실제는 `s_wifi_event_group` 사용) → 컴파일 warning만 발생, 기능 영향 없음. 진단 마무리 시 함께 정리 검토.
+  - 휴대폰 핫스팟도 일반 무선 공유기 대비 broadcast forwarding/client isolation/DTIM 제어 측면에서 제약 있음(특히 iOS). 사용자가 일반 공유기 확보 어려워 휴대폰 핫스팟 + WIFI_PS_NONE으로 진행 결정 (D-017).
+- **잔여 디버그 코드 (PS 효과 검증 후 정리)**:
+  - `firmware/csi_rx1/main/csi_rx1_main.c`, `firmware/csi_rx2/main/csi_rx2_main.c`: 전역 카운터 5개 + `stats_task` + `wifi_csi_cb`/`udp_send_task` 카운트 증가 코드. **PS 비활성화 효과는 영구 코드, 카운터/stats_task는 임시 디버그**라 한 파일 안에 섞여 있음. 검증 종료 후 카운터만 분리 정리.
+  - TX는 1초당 송신 카운트 로그를 이미 원복 완료 (`csi_tx_main.c`).
+- **3순위 fix (별도 자문 진행 중)**: TX target `255.255.255.255` (broadcast) → 노트북 LAN IP `192.168.137.1` (unicast)로 변경. 이론적으로 broadcast forwarding 제약 회피 가능, 다만 unicast의 무선 air-time 특성(retry/ACK 패턴)이 broadcast와 달라 RX promiscuous sniff 효과는 실측 필요. 다른 AI 자문 후 결정.
 
 ### 2026-05-11 — 추론 파이프라인 구현 (inference/ 모듈, server 연결, D-013~D-015)
 
@@ -197,10 +239,20 @@ _Last updated: 2026-05-11 (inference pipeline) | Updated by: claude-code_
 - 패킷 파싱 기준: STATE.md D-007 + `firmware/csi_rx1/main/csi_rx1_main.c`, `firmware/csi_rx2/main/csi_rx2_main.c`의 `csi_packet_t` (`__attribute__((packed))`)에 정렬. 224B = `<BBbBIQ`(16B header) + `52f`(208B). `parse_packet()`은 size/magic(0xAB)/device_id(0x01|0x02) 모두 검증.
 - 페어링: `PairingBuffer`가 Rx1/Rx2 timestamp 기준 50ms 이내 가장 가까운 패킷을 pair로 확정, 200ms 미완성 만료, 버퍼 200개 cap, `threading.Lock` 보호. cleanup은 host wall-clock이 아닌 가장 최근에 본 패킷의 `timestamp_us`를 reference로 삼아 ESP↔host SNTP skew 영향 제거. UDP receiver는 `start_udp_receiver()`로 1회 실행되는 daemon thread 2개(recv, cleanup).
 - 녹화 시점: ENTER → `beep_ready()` → 3초 카운트다운 → **여기까지 CSV에 저장하지 않음** → `recorder.start_session()` → 첫 stage 직전 `beep_stage()` → stage/duration 대기 → 마지막 stage 종료 직후 `recorder.stop_session()` → `beep_end()`. 즉 ready/카운트다운 구간은 CSV에서 제외되고 실제 동작 구간만 저장.
-- CSV 컬럼 109개 고정: `timestamp_us, seq_rx{1,2}, rssi_rx{1,2}, amp_rx1_0..51, amp_rx2_0..51`. 파일명: `data/raw/E{env}_S{subj:02d}_A_{code}_T{trial:03d}.csv`. trial은 동일 (env, subject, code) 조합 파일 수 + 1 자동 증가.
+- CSV 컬럼 107개 고정 (rssi 미저장): `timestamp_us, seq_rx{1,2}, amp_rx1_0..51, amp_rx2_0..51`. 파일명: `data/raw/E{env}_S{subj:02d}_A_{code}_T{trial:03d}.csv`. trial은 동일 (env, subject, code) 조합 파일 수 + 1 자동 증가.
 - 손실률: `(max_seq - min_seq + 1 - unique_seq_count) / (max_seq - min_seq + 1)`을 rx1/rx2 각각 계산해 max 반환. 5% 초과 시 경고 출력 후 저장 여부 사용자 선택.
 - CLI 진입점: `python collect/collect_main.py [--port 5005]`. 초기 선택은 env → subject → activity 순(스펙은 env→activity→subject지만 활동 표 완료 수가 정확하려면 subject가 먼저 정해져야 함 — 결과 동일, UX만 조정). 변경 메뉴(1.env / 2.activity / 3.subject / 4.없음 / q.종료) 루프.
-- 검증: `python -m py_compile collect/{labels,recorder,udp,beep,collect_main}.py` 통과. `python collect/_selfcheck.py` — 5개 항목(parse_packet, pairing(50ms 통과/60ms 차단/cleanup), loss_rate(0/10%/empty/single), trial 자동 증가 + CSV 컬럼 109개 순서, labels 270세션) 모두 ALL_OK. 손실률 계산은 numpy 없이 stdlib만 사용.
+- 검증: `python -m py_compile collect/{labels,recorder,udp,beep,collect_main}.py` 통과. `python collect/_selfcheck.py` — 5개 항목(parse_packet, pairing(50ms 통과/60ms 차단/cleanup), loss_rate(0/10%/empty/single), trial 자동 증가 + CSV 컬럼 107개 순서, labels 270세션) 모두 ALL_OK. 손실률 계산은 numpy 없이 stdlib만 사용.
+
+### 2026-05-11 — sanity check 결과 및 펌웨어 수정 (P1~P5)
+
+- T002 CSV (390 Hz): P1 가설 A(NVS 잔존 interval) 유력. TX NVS 로드 제거로 100 Hz 고정 (T2).
+- RX MAC 필터 추가로 P1 가설 B(비TX 트래픽 캡처) 동시 차단 (T3).
+- P2(rx2 seq 비단조): P1 해결 후 재수집으로 재검증 예정.
+- P3(DC null idx 21-30): esp-csi 기본 마스킹으로 추정, 학습 영향 없음.
+- P4(T001 빈 파일): recorder.py save_session에서 0행 파일 자동 skip 적용.
+- P5(컬럼 수): STATE.md 109→107 정정 완료.
+- 기존 수집 데이터(T002 등) 390 Hz 기록으로 전면 무효. P1 수정 후 재수집 필요.
 - 의존성: pandas (CSV 저장), winsound (Windows 표준 — 별도 설치 불필요). 외부 설치 추가 없음.
 - 문서 불일치 명시: `context/SHARED.md`의 UDP 패킷 구조 표(magic 누락, rssi 누락, subcarrier_num 1B로 표기)는 D-007 및 실제 펌웨어와 다름. 사용자 지침에 따라 이번 작업에서는 SHARED.md 수정하지 않음. `firmware/CLAUDE.md`의 예시 구조체(`csi_packet_t`)도 magic/rssi/reserved 누락으로 펌웨어와 불일치 — 동일 사유로 미수정.
 - 범위 외: `data/collection_log.md` 자동 갱신은 사용자 요청에 따라 이번 범위 제외. `server/dongseok` 수신 서버와 동일 UDP 포트 동시 bind 시도하지 않음(독립 실행).
@@ -283,6 +335,10 @@ _Last updated: 2026-05-11 (inference pipeline) | Updated by: claude-code_
 
 ## Pending Items
 
+- [ ] WIFI_PS_NONE 적용 후 WALK 세션 재수집 → 페어 카운트 안정성 검증 (목표: 8초 세션 700~800 페어, burst→idle 패턴 소멸)
+- [ ] 3순위 fix(TX broadcast → unicast) 적용 여부 결정 — 다른 AI 자문 결과 반영
+- [ ] PS 비활성화 효과 검증 종료 후 RX1/RX2 디버그 카운터·stats_task 정리 (`csi_rx1_main.c`, `csi_rx2_main.c`)
+- [ ] `wifi_event_group` 미사용 잔재 변수 정리 (`csi_rx1_main.c:86`, RX2 동일)
 - [ ] Alsaify 전체 사전학습 실행 (RTX4060 서버 수령 후)
 - [x] `preprocess_directory()`에 `tail_window` 옵션 추가 (윈도우-only 디버깅/분석 API 일관성 보완)
 - [ ] Sliding window size 실험적 결정 (데이터 수집 후)
