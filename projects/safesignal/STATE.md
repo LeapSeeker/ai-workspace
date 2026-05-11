@@ -135,6 +135,12 @@ _Last updated: 2026-05-11 (inference pipeline) | Updated by: claude-code_
   - 플로우: on_paired → Queue.put(pair) / InferenceWorker: Queue.get() → 윈도우 버퍼 → stride 조건 충족 시 전처리+추론 → fall이면 on_fall_detected() 호출.
 - **Status:** confirmed
 
+### [D-016] 서버→Pi4 timestamp_us 기준 확정
+- **Date:** 2026-05-11
+- **Decided by:** claude-ai / codex review
+- **Content:** 서버→Pi4 WebSocket 낙상 알림의 `timestamp_us`는 낙상으로 판정된 윈도우의 기준 Rx1 패킷 `timestamp_us`로 확정. 실험/성능 측정 및 서버 fall history와 같은 기준점을 유지하기 위함. 값이 0이거나 누락된 경우에만 서버 현재 시각(Unix μs)을 fallback으로 사용.
+- **Status:** confirmed
+
 ---
 
 ## Implementation Status
@@ -300,10 +306,6 @@ _Last updated: 2026-05-11 (inference pipeline) | Updated by: claude-code_
 | W5 | 2026-05-28 | E2E 통합, 2환경 검증 |
 | W6 | 2026-06-04 | Demo |
 | W7 | 2026-06-11 | 최종 발표 |
-
-
-
-
 
 
 
