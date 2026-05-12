@@ -1,6 +1,6 @@
 ﻿# SafeSignal Project State
 
-_Last updated: 2026-05-11 (WIFI_PS_NONE 적용 + 페어 변동성 진단) | Updated by: claude-code_
+_Last updated: 2026-05-12 (펌웨어 PS_NONE 변경 main 푸시 + gitignore 보강) | Updated by: claude-code_
 
 ---
 
@@ -162,9 +162,9 @@ _Last updated: 2026-05-11 (WIFI_PS_NONE 적용 + 페어 변동성 진단) | Upda
 | metrics.py (FallMetrics) | done | feature/pretrained-model | 2026-05-09 |
 | augment/augment.py | done | feature/pretrained-model | 2026-05-09 |
 | model/r_pca.py | done | feature/pretrained-model | 2026-05-09 |
-| firmware/csi_tx (PS 비활성화 적용) | done | main (워킹 트리) | 2026-05-11 |
-| firmware/csi_rx1 (PS 비활성화 + 디버그 카운터) | done (디버그 빌드) | main (워킹 트리) | 2026-05-11 |
-| firmware/csi_rx2 (PS 비활성화 + 디버그 카운터) | done (디버그 빌드) | main (워킹 트리) | 2026-05-11 |
+| firmware/csi_tx (PS 비활성화 적용) | done | main | 2026-05-12 |
+| firmware/csi_rx1 (PS 비활성화 + 디버그 카운터) | done (디버그 빌드) | main | 2026-05-12 |
+| firmware/csi_rx2 (PS 비활성화 + 디버그 카운터) | done (디버그 빌드) | main | 2026-05-12 |
 | Alsaify 전체 사전학습 (E1+E2, RTX4060) | pending | - | - |
 | UDP 수신 서버 | pending | - | - |
 | WebSocket 서버-Pi4 통신 | pending | - | - |
@@ -178,6 +178,12 @@ _Last updated: 2026-05-11 (WIFI_PS_NONE 적용 + 페어 변동성 진단) | Upda
 ---
 
 ## Review Notes
+
+### 2026-05-12 — 펌웨어 변경 main 푸시 + gitignore 보강
+
+- 적용 커밋 (wifi-csi-fall-detection main): `dcb117c [수정] WiFi Power Save 비활성화 및 RX 처리량 모니터 카운터 추가`, `b7145fa [수정] gitignore 보강 및 데이터 sanity-check 스크립트 추가`.
+- 펌웨어: TX/RX1/RX2 `esp_wifi_set_ps(WIFI_PS_NONE)` 적용분, RX1/RX2 `stats_task` + 5개 카운터 디버그 코드, sdkconfig IDF 5.3.5→5.4.3 자동 재생성분을 main에 반영. 주석은 "DEBUG, 안정화 후 제거"로 표시. WALK 재수집 검증은 별도 진행.
+- 운영: `.gitignore`에 `server/logs/`, `.claude/settings.local.json` 추가. 추적되고 있던 `.claude/settings.local.json`은 `git rm --cached`로 추적 해제 (개인 권한 설정, 팀 공유 대상 아님). 분석용 sanity-check 스크립트 `data/raw/_analyze_T002.py`를 분석 도구로 보존 (CSV loss/seq/amp 통계, T001~T002 검증용).
 
 ### 2026-05-11 — WALK 세션 페어 변동성 진단 + WIFI_PS_NONE 적용 (D-017)
 
