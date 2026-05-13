@@ -1,6 +1,6 @@
 ﻿# SafeSignal Project State
 
-_Last updated: 2026-05-13 (D-018 100Hz 리샘플 구현 검토 및 커밋 완료) | Updated by: codex_
+_Last updated: 2026-05-13 (D-018 커밋 `f25f018` origin/main 푸시 완료) | Updated by: claude-code_
 
 ---
 
@@ -192,6 +192,10 @@ _Last updated: 2026-05-13 (D-018 100Hz 리샘플 구현 검토 및 커밋 완료
 ---
 
 ## Review Notes
+
+### 2026-05-13 — D-018 커밋 origin/main 푸시
+
+- `f25f018 SafeSignal 자체수집 100Hz 리샘플 전처리 추가`를 origin/main에 푸시 (`a589205..f25f018`). 코드/STATE 변경 없음, 로컬 ahead 1 → 동기화 완료.
 
 ### 2026-05-13 — Codex review: D-018 SafeSignal 리샘플 구현 검토 및 커밋 완료
 
