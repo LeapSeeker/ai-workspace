@@ -1,6 +1,6 @@
 ﻿# SafeSignal Project State
 
-_Last updated: 2026-05-13 (D-018 커밋 `f25f018` origin/main 푸시 완료) | Updated by: claude-code_
+_Last updated: 2026-05-14 (팀원 Alsaify 사전학습 best.pt 수령·적용) | Updated by: claude-code_
 
 ---
 
@@ -176,7 +176,7 @@ _Last updated: 2026-05-13 (D-018 커밋 `f25f018` origin/main 푸시 완료) | U
 | firmware/csi_tx (PS 비활성화 적용) | done | main | 2026-05-12 |
 | firmware/csi_rx1 (PS 비활성화 + 디버그 카운터) | done (디버그 빌드) | main | 2026-05-12 |
 | firmware/csi_rx2 (PS 비활성화 + 디버그 카운터) | done (디버그 빌드) | main | 2026-05-12 |
-| Alsaify 전체 사전학습 (E1+E2, RTX4060) | pending | - | - |
+| Alsaify 전체 사전학습 (E1+E2) | done (외부 수신·로컬 적용) | main (`model/pretrained/checkpoints/` gitignored) | 2026-05-14 |
 | UDP 수신 서버 | pending | - | - |
 | WebSocket 서버-Pi4 통신 | pending | - | - |
 | 자체 데이터 수집 파이프라인 | done | feature/pretrained-model | 2026-05-11 |
@@ -192,6 +192,15 @@ _Last updated: 2026-05-13 (D-018 커밋 `f25f018` origin/main 푸시 완료) | U
 ---
 
 ## Review Notes
+
+### 2026-05-14 — 팀원 Alsaify 사전학습 best.pt 수령·적용
+
+- 입력: 사용자 제공 `checkpoints-20260512T010924Z-3-001.zip` (프로젝트 루트). 내용물 — `best.pt` (1,558,504 B), `last.pt` (동일 크기), `best_metrics.json`, `final_metrics.json`, `history.json`, `dataset_cache_e12_w300_s300_tail_ps.npz` (16.5 MB, Alsaify E1+E2 캐시).
+- 메트릭(best 기준): `fall_recall=0.91875`, `fall_precision=0.9074`, `fall_f1=0.9130`, `far=0.0222`, `accuracy=0.8101`, `meets_all_targets=true`. final 시점도 `fall_recall=0.909 / F1=0.893`로 D-011 목표 모두 충족. 테스트셋 1,669개 (fall 320·walking 320·sit_stand 308·lying 320·standing 241·picking 160) — 클래스 6개와 `fall_label=0` 모두 [model/pretrained/model.py](https://github.com/LeapSeeker/wifi-csi-fall-detection/blob/main/model/pretrained/model.py) `CLASSES` 와 일치.
+- 캐시 파일명 `dataset_cache_e12_w300_s300_tail_ps.npz` 는 [D-006] (E1+E2) + train.py `_make_cache_path(envs=[1,2], window_size=300, stride=300, tail_window=True, pad_short=True)` 명명 규칙과 정합 — 팀원 측이 합의된 학습 설정을 그대로 사용했음을 확인.
+- 적용: 기존 `model/pretrained/checkpoints/` 6개 파일을 `model/pretrained/checkpoints_local_backup_20260514/` 로 통째 이동 후, 팀원 6개 파일을 같은 위치에 배치. `server/inference/config.py:MODEL_PATH` 절대 경로(`project_root/model/pretrained/checkpoints/best.pt`)가 그대로 가리키므로 코드 변경 없음. `model/pretrained/checkpoints/` 는 이미 `.gitignore` 등재(line 15)되어 git status 클린.
+- 검증: `FallPredictor(device="cpu")` 로 새 best.pt 로드 → classes 튜플 정확히 `('fall','walking','sit_stand','lying','standing','picking')` 매치, 더미 (300, 104) 랜덤 윈도우 `predict()` 호출 시 softmax 합 1.000000 / 클래스 분기 정상 / `is_fall=False` (랜덤 입력이라 의도된 결과). FallPredictor 자체에는 6-class fine-tune 경고 분기가 있으나 이 체크포인트는 6-class라 경고 없이 통과.
+- 잔여물: 원본 zip `checkpoints-20260512T010924Z-3-001.zip` 과 백업 폴더 `model/pretrained/checkpoints_local_backup_20260514/` 는 untracked 상태로 보존 — 사용자 결정 후 삭제·이동.
 
 ### 2026-05-13 — D-018 커밋 origin/main 푸시
 
@@ -411,7 +420,7 @@ _Last updated: 2026-05-13 (D-018 커밋 `f25f018` origin/main 푸시 완료) | U
 - [ ] fine-tuning 진입 전 `train.py`/캐시 빌더에 SafeSignal CSV 전용 경로 연결 (`preprocess_safesignal_file*`)
 - [ ] E2E 실시간 추론 단계에서 `server/inference/buffer.py`를 timestamp-aware 100Hz resampling buffer로 전환
 - [ ] `wifi_event_group` 미사용 잔재 변수 정리 (`csi_rx1_main.c:86`, RX2 동일)
-- [ ] Alsaify 전체 사전학습 실행 (RTX4060 서버 수령 후)
+- [x] Alsaify 전체 사전학습 실행 (2026-05-14 팀원 결과 수령·로컬 적용 — best fall_recall=0.919 / F1=0.913 / FAR=0.022, meets_all_targets=true)
 - [x] `preprocess_directory()`에 `tail_window` 옵션 추가 (윈도우-only 디버깅/분석 API 일관성 보완)
 - [ ] Sliding window size 실험적 결정 (데이터 수집 후)
 - [ ] 자체 수집 계획 최종 구조 확정 (W3 이전)
