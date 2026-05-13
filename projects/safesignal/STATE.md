@@ -1,6 +1,6 @@
 ﻿# SafeSignal Project State
 
-_Last updated: 2026-05-12 (유니캐스트 천장 70Hz 진단 + D-018 리샘플 도입) | Updated by: claude-code_
+_Last updated: 2026-05-13 (D-018 100Hz 리샘플 구현 완료) | Updated by: claude-code_
 
 ---
 
@@ -180,6 +180,9 @@ _Last updated: 2026-05-12 (유니캐스트 천장 70Hz 진단 + D-018 리샘플 
 | UDP 수신 서버 | pending | - | - |
 | WebSocket 서버-Pi4 통신 | pending | - | - |
 | 자체 데이터 수집 파이프라인 | done | feature/pretrained-model | 2026-05-11 |
+| preprocessing/resample.py (D-018 SafeSignal 100Hz 리샘플) | done | main | 2026-05-13 |
+| preprocessing/loader.py SafeSignal 경로 (load_safesignal_csv 등) | done | main | 2026-05-13 |
+| preprocessing/pipeline.py SafeSignal 경로 (preprocess_safesignal_file*) | done | main | 2026-05-13 |
 | fine-tuning | pending | - | - |
 | Pi4 하드웨어 버튼 인터페이스 | pending | - | - |
 | E2E 통합 테스트 | pending | - | - |
@@ -189,6 +192,19 @@ _Last updated: 2026-05-12 (유니캐스트 천장 70Hz 진단 + D-018 리샘플 
 ---
 
 ## Review Notes
+
+### 2026-05-13 — D-018 SafeSignal 100Hz 리샘플 전처리 구현
+
+- 적용 브랜치: `main` (코드 커밋은 별도, 이 STATE 업데이트와 분리). Alsaify 경로(`load_csi_csv`, `preprocess_file*`, `preprocess_directory*`)는 변경하지 않고 SafeSignal 전용 경로를 추가만 함.
+- 신규 파일: `model/preprocessing/resample.py`, `model/preprocessing/test_safesignal.py`. 기존 파일 확장: `model/preprocessing/loader.py`, `model/preprocessing/pipeline.py`, `model/preprocessing/__init__.py`.
+- `resample.py`: `resample_to_100hz(amp, timestamps_us, target_hz=100.0, max_gap_ms=100.0) → ResampleResult`. step_us = round(1e6/target_hz) (100Hz → 10,000us). 동작: stable sort → 동일 timestamp 평균 병합 (`np.add.at` 그룹 평균, drop이 아닌 이유는 같은 시점 두 측정값을 모두 무시하지 않기 위함) → 단조 증가 검증 → 첫/마지막 timestamp 안쪽만 균일 격자 생성 → subcarrier별 `np.interp` 선형 보간. cubic/spline 미사용(overshoot 위험). max_gap_ms 초과 gap은 hard reject 하지 않고 `gap_count`/`max_gap_us`로 metadata만 노출. `ResampleResult` 필드: `amplitude`, `timestamps_us`, `original_count`, `resampled_count`, `original_rate_hz`, `target_hz`, `max_gap_us`, `gap_count`. n_packets<2 케이스는 빈 결과 + nan rate로 안전 반환.
+- `loader.py`: 모듈 docstring을 Alsaify+SafeSignal 양쪽 명시. 신규 `SafeSignalMeta(env, subject, activity:str, trial, filename)`, `SafeSignalRaw(amplitude, timestamps_us, rx, meta)`, `parse_safesignal_filename`, `load_safesignal_csv(path, rx="both")`. 파일명 정규식 `E{env}_S{subj}_A_{ACTIVITY}_T{trial}` (activity는 `[A-Z0-9_]+`로 `SIT_STD` 같은 멀티토큰 허용, 문자열 그대로 보존). `rx="rx1"|"rx2"` → (n,52), `rx="both"` → Rx1/Rx2 서브캐리어 concat (n,104) (D-013 정합). 필수 컬럼 누락 시 명확한 ValueError. Alsaify 경로 시그니처/동작 변경 없음.
+- `pipeline.py`: `SafeSignalPreprocessResult(windows, meta, resample)`, `SafeSignalModelInputResult(inputs, meta, resample)` dataclass 추가. `preprocess_safesignal_file(...)` = `load_safesignal_csv → resample_to_100hz → sliding_windows`, `preprocess_safesignal_file_full(...)`은 후단에 `windows_to_model_input` 적용. 파라미터: `rx="both"`, `target_hz=100.0`, `max_gap_ms=100.0`, `window_size=WINDOW_SIZE`, `stride=None`, `drop_last=True`, `tail_window=False`, `pad_short=False`, `rpca_max_iter=DEFAULT_MAX_ITER`, `rpca_tol=None`. 5초 수집 데이터에서는 호출자가 `tail_window=True`로 잔여 패킷 보존. Alsaify 함수 4종(`preprocess_file`, `preprocess_file_full`, `preprocess_directory`, `preprocess_directory_full`) 변경 없음. 공통 후단(`sliding_windows`, `windows_to_model_input`, `window_to_model_input`)만 재사용.
+- `__init__.py`: 신규 public symbol 8개를 `__all__`에 추가 (load_safesignal_csv, parse_safesignal_filename, SafeSignalMeta, SafeSignalRaw, resample_to_100hz, ResampleResult, preprocess_safesignal_file, preprocess_safesignal_file_full, SafeSignalPreprocessResult, SafeSignalModelInputResult).
+- `test_safesignal.py`: 7-case 모두 ALL_OK. (1) parse 성공 + `SIT_STD` 멀티토큰 활성, (2) synthetic 400 packet × 70Hz CSV로 `load_safesignal_csv(rx='both')` shape=(400,104), rx='rx1' shape=(400,52), (3) resample 후 `np.diff(timestamps_us) == 10000` 전부, 외삽 없음 (start≥min, end≤max), original_rate≈70Hz, (4) 중복 + 역순 timestamp 처리(평균 병합 + stable sort), (5) synthetic으로 `preprocess_safesignal_file(tail_window=True)` → windows (2, 300, 104), (6) 실제 CSV `data/raw/E1_S01_A_STAND_T001.csv` (377 패킷, 5.49s, 68.49Hz)로 windows (2, 300, 104) — `gap_count=5`, `max_gap=189782us` 노출(reject 아님), (7) `preprocess_safesignal_file_full` (RPCA 포함) → inputs (2, 1, 28, 20). 기본 SKIP, `SAFESIGNAL_FULL_TEST=1` 환경변수로 활성. test_pipeline.py(Alsaify) 별도 PASS 재확인.
+- 결정 정정: D-018 본문은 scipy `interp1d` 선형 보간을 명시했으나 구현은 사용자 지침에 따라 `np.interp` 사용. 결과 동일(둘 다 1차 선형 보간), 의존성 1개 줄어듦. D-018 본문은 별도 결정 갱신 없이 구현 노트로만 남김.
+- 범위 외(이번 작업 미포함): `server/inference/buffer.py`의 timestamp-aware resampling buffer 전환. 이번은 오프라인 자체수집 CSV 학습 입력 생성만 가능하게 하는 범위. 실시간 추론 측은 별도 작업.
+- 잔여: 자체수집 학습 시 `train.py`/캐시 빌더가 SafeSignal 경로를 호출하도록 추가 작업 필요 — 현재 train.py는 Alsaify `preprocess_directory_full`만 사용. fine-tuning 단계 진입 시 캐시 명명 규칙(`dataset_cache_e*_w*_s*[_tail][_ps].npz`)에 `_safesignal` suffix 또는 별도 빌더 도입 검토.
 
 ### 2026-05-12 — 유니캐스트 효과 검증 + 70Hz 천장 진단 → D-018 도입
 
@@ -378,7 +394,7 @@ _Last updated: 2026-05-12 (유니캐스트 천장 70Hz 진단 + D-018 리샘플 
 - [x] WIFI_PS_NONE 적용 후 WALK 세션 재수집 → 페어 카운트 안정성 검증 (2026-05-12 완료. 8초 세션 570~652 페어, burst→idle 패턴 소멸. 700~800 목표는 미달이고 ~70Hz 천장 발견 → [D-018]로 처리)
 - [x] 3순위 fix(TX broadcast → unicast) 적용 여부 결정 (2026-05-12 적용 + 효과 확정. broadcast 3Hz → unicast ~70Hz)
 - [ ] PS 비활성화 효과 검증 종료 후 RX1/RX2 디버그 카운터·stats_task 정리 (`csi_rx1_main.c`, `csi_rx2_main.c`) — 라우터 환경 재평가 마친 뒤 진행 권장 (D-018 후속)
-- [ ] self-collected 100Hz 리샘플 구현 (`model/preprocessing/loader.py`, scipy `interp1d` 선형 보간 — [D-018])
+- [x] self-collected 100Hz 리샘플 구현 (2026-05-13 완료. `model/preprocessing/resample.py` 신규 + loader/pipeline 확장. scipy `interp1d` 대신 `np.interp` 사용 — 결과 동일, 의존성 -1. ResampleResult metadata에 gap_count/max_gap_us/original_rate_hz 노출. Alsaify 경로 무변경.)
 - [ ] portable router 확보 시 70Hz 천장 해소 가능성 재평가, 리샘플 필요성 재판단 ([D-017]/[D-018] 후속)
 - [ ] `wifi_event_group` 미사용 잔재 변수 정리 (`csi_rx1_main.c:86`, RX2 동일)
 - [ ] Alsaify 전체 사전학습 실행 (RTX4060 서버 수령 후)
