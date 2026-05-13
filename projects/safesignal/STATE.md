@@ -1,6 +1,6 @@
 ﻿# SafeSignal Project State
 
-_Last updated: 2026-05-13 (D-018 100Hz 리샘플 구현 완료) | Updated by: claude-code_
+_Last updated: 2026-05-13 (D-018 100Hz 리샘플 구현 검토 및 커밋 완료) | Updated by: codex_
 
 ---
 
@@ -159,7 +159,7 @@ _Last updated: 2026-05-13 (D-018 100Hz 리샘플 구현 완료) | Updated by: cl
   - 적용 위치: `model/preprocessing/loader.py` (또는 self-collected 전용 로더). 원본 CSV는 그대로 두고 로딩 단계에서만 변환. 실시간 추론 측은 별도 검토 — 페어 incoming 시점에 동일 보간 적용 필요(stride 누적 + 시점 보간).
   - 가시화 보강: `collect/collect_main.py` `_run_session` 출력에 `pair_rate` / `capture_ratio` 추가, 운용 중 천장 변동 즉시 확인.
   - 라우터 확보 시 리샘플 필요성 재평가 — Pending Items에 등록.
-- **Status:** confirmed (구현 pending — 보드 없이 진행 가능)
+- **Status:** confirmed (2026-05-13 구현 완료 — `f25f018 SafeSignal 자체수집 100Hz 리샘플 전처리 추가`)
 
 ---
 
@@ -192,6 +192,14 @@ _Last updated: 2026-05-13 (D-018 100Hz 리샘플 구현 완료) | Updated by: cl
 ---
 
 ## Review Notes
+
+### 2026-05-13 — Codex review: D-018 SafeSignal 리샘플 구현 검토 및 커밋 완료
+
+- 검토 대상 커밋 (wifi-csi-fall-detection main): `f25f018 SafeSignal 자체수집 100Hz 리샘플 전처리 추가`.
+- 검토 결과: blocking issue 없음. SafeSignal 전용 경로가 Alsaify 기존 경로와 분리되어 있고, 공통 후단(`sliding_windows`, `windows_to_model_input`, `window_to_model_input`)만 재사용하는 구조가 D-018/D-013과 정합됨.
+- Codex 보완: `resample_to_100hz()`에 `target_hz <= 0` 및 `step_us <= 0` validation 추가, `test_safesignal.py`의 grid count 주석 오타 수정 후 동일 커밋에 포함.
+- 검증 재현: 테스트 전용 Python 3.14 의존성(`numpy`, `pandas`, `scipy`, `tqdm`)을 임시 `.codex-test-deps`에 설치해 실행 후 삭제. `SAFESIGNAL_FULL_TEST=1 python -m model.preprocessing.test_safesignal` → `ALL_OK`, `preprocess_safesignal_file_full` inputs `(2, 1, 28, 20)` 확인. `python model/preprocessing/test_pipeline.py` → Alsaify 전처리 경로 PASS, CNN forward만 `torch` 미설치로 skip.
+- 잔여 리스크: 실제 fine-tuning 진입 시 `train.py`/캐시 빌더가 SafeSignal CSV 전용 경로를 호출하도록 연결 필요. 실시간 추론은 아직 packet-count 기반 buffer라 70Hz 환경에서 300패킷이 약 4.3초를 커버함 — E2E 단계에서 timestamp-aware resampling buffer 전환 필요.
 
 ### 2026-05-13 — D-018 SafeSignal 100Hz 리샘플 전처리 구현
 
@@ -396,6 +404,8 @@ _Last updated: 2026-05-13 (D-018 100Hz 리샘플 구현 완료) | Updated by: cl
 - [ ] PS 비활성화 효과 검증 종료 후 RX1/RX2 디버그 카운터·stats_task 정리 (`csi_rx1_main.c`, `csi_rx2_main.c`) — 라우터 환경 재평가 마친 뒤 진행 권장 (D-018 후속)
 - [x] self-collected 100Hz 리샘플 구현 (2026-05-13 완료. `model/preprocessing/resample.py` 신규 + loader/pipeline 확장. scipy `interp1d` 대신 `np.interp` 사용 — 결과 동일, 의존성 -1. ResampleResult metadata에 gap_count/max_gap_us/original_rate_hz 노출. Alsaify 경로 무변경.)
 - [ ] portable router 확보 시 70Hz 천장 해소 가능성 재평가, 리샘플 필요성 재판단 ([D-017]/[D-018] 후속)
+- [ ] fine-tuning 진입 전 `train.py`/캐시 빌더에 SafeSignal CSV 전용 경로 연결 (`preprocess_safesignal_file*`)
+- [ ] E2E 실시간 추론 단계에서 `server/inference/buffer.py`를 timestamp-aware 100Hz resampling buffer로 전환
 - [ ] `wifi_event_group` 미사용 잔재 변수 정리 (`csi_rx1_main.c:86`, RX2 동일)
 - [ ] Alsaify 전체 사전학습 실행 (RTX4060 서버 수령 후)
 - [x] `preprocess_directory()`에 `tail_window` 옵션 추가 (윈도우-only 디버깅/분석 API 일관성 보완)
@@ -420,8 +430,4 @@ _Last updated: 2026-05-13 (D-018 100Hz 리샘플 구현 완료) | Updated by: cl
 | W5 | 2026-05-28 | E2E 통합, 2환경 검증 |
 | W6 | 2026-06-04 | Demo |
 | W7 | 2026-06-11 | 최종 발표 |
-
-
-
-
 
