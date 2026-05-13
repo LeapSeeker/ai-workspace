@@ -1,6 +1,6 @@
 ﻿# SafeSignal Project State
 
-_Last updated: 2026-05-14 (팀원 Alsaify 사전학습 best.pt 수령·적용) | Updated by: claude-code_
+_Last updated: 2026-05-14 (D-019 자체수집 평가 분할/베이스라인 흐름 확정) | Updated by: claude-code_
 
 ---
 
@@ -160,6 +160,18 @@ _Last updated: 2026-05-14 (팀원 Alsaify 사전학습 best.pt 수령·적용) |
   - 가시화 보강: `collect/collect_main.py` `_run_session` 출력에 `pair_rate` / `capture_ratio` 추가, 운용 중 천장 변동 즉시 확인.
   - 라우터 확보 시 리샘플 필요성 재평가 — Pending Items에 등록.
 - **Status:** confirmed (2026-05-13 구현 완료 — `f25f018 SafeSignal 자체수집 100Hz 리샘플 전처리 추가`)
+
+### [D-019] 자체수집 평가 분할 + 베이스라인 측정 흐름 확정
+- **Date:** 2026-05-14
+- **Decided by:** user / claude-code
+- **Content:**
+  - **분할:** 자체수집 240세션은 **subject 단위 2명 train + 1명 test 봉인** 분할. test 1명의 raw 데이터는 학습/증강/모델 선정/하이퍼파라미터 튜닝/threshold 결정에 일체 사용 금지. 어떤 subject(S01/S02/S03)를 test로 봉인할지는 **자체수집 본격 진입 시점에 사전 지정** (수집 종료 후 결정 금지 — 진행 중 leakage 차단 보장 불가).
+  - **흐름:** 3명 수집 완료 → 봉인 test로 현 best.pt 베이스라인 평가(6-class 기준) → train split만 증강(5×, D-010) → 파인튜닝(7-class) → 동일 test로 비교 평가. 베이스라인 vs 파인튜닝 개선폭은 6-class 교집합으로 보고하고 7-class 전체 metrics는 보조 지표.
+  - **증강 적용 범위:** 학습 파이프라인의 train split 내부에서만 호출. test/val 에는 raw 그대로. `augment/augment.py` 호출 위치가 split 이후인지 코드 점검 항목으로 추가.
+  - **running 클래스:** 사전학습 best.pt는 6-class (running 없음, D-006) → 베이스라인 평가에서 자체수집의 running 세션은 제외하고 6-class만 채점. 파인튜닝 모델은 7-class로 학습·평가.
+  - **fall 수집 우선순위:** D-011 핵심 지표가 fall_recall이고 fall 세션 부족 시 평가 자체가 무의미 → **수집 일정상 240세션 전부 못 채워도 fall 60(앉다→낙 30 + 서다→낙 30) 우선, walking/sit_stand 차순위, picking/lying 최후순위**.
+  - **베이스라인 평가 산출 항목 (필수):** 클래스별 confusion matrix, FALL_THRESHOLD sweep(0.3~0.7), subject별 metrics. 파인튜닝 설계 입력으로 사용.
+- **Status:** confirmed (구현 미진입 — 자체수집 진척에 따라 평가 스크립트 별도 작성 예정)
 
 ---
 
