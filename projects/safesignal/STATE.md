@@ -200,7 +200,7 @@ _Last updated: 2026-05-14 (팀원 Alsaify 사전학습 best.pt 수령·적용) |
 - 캐시 파일명 `dataset_cache_e12_w300_s300_tail_ps.npz` 는 [D-006] (E1+E2) + train.py `_make_cache_path(envs=[1,2], window_size=300, stride=300, tail_window=True, pad_short=True)` 명명 규칙과 정합 — 팀원 측이 합의된 학습 설정을 그대로 사용했음을 확인.
 - 적용: 기존 `model/pretrained/checkpoints/` 6개 파일을 `model/pretrained/checkpoints_local_backup_20260514/` 로 통째 이동 후, 팀원 6개 파일을 같은 위치에 배치. `server/inference/config.py:MODEL_PATH` 절대 경로(`project_root/model/pretrained/checkpoints/best.pt`)가 그대로 가리키므로 코드 변경 없음. `model/pretrained/checkpoints/` 는 이미 `.gitignore` 등재(line 15)되어 git status 클린.
 - 검증: `FallPredictor(device="cpu")` 로 새 best.pt 로드 → classes 튜플 정확히 `('fall','walking','sit_stand','lying','standing','picking')` 매치, 더미 (300, 104) 랜덤 윈도우 `predict()` 호출 시 softmax 합 1.000000 / 클래스 분기 정상 / `is_fall=False` (랜덤 입력이라 의도된 결과). FallPredictor 자체에는 6-class fine-tune 경고 분기가 있으나 이 체크포인트는 6-class라 경고 없이 통과.
-- 잔여물: 원본 zip `checkpoints-20260512T010924Z-3-001.zip` 과 백업 폴더 `model/pretrained/checkpoints_local_backup_20260514/` 는 untracked 상태로 보존 — 사용자 결정 후 삭제·이동.
+- 잔여물 처리(사용자 결정): 원본 zip `checkpoints-20260512T010924Z-3-001.zip` 삭제 완료(팀원 공유 경로에 원본 잔존). 구 로컬 백업 폴더 `model/pretrained/checkpoints_local_backup_20260514/` 는 보존하되 안내 마커 `_DELETE_AFTER_2026-06-04.txt` 추가 — 신 best.pt 운영 안정 확인 후 데모(2026-06-04) 이후 수동 삭제 예정.
 
 ### 2026-05-13 — D-018 커밋 origin/main 푸시
 
