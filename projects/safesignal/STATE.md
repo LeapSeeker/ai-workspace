@@ -1,6 +1,6 @@
 ﻿# SafeSignal Project State
 
-_Last updated: 2026-05-17 (RPCA degenerate 입력 방어 추가) | Updated by: claude-code_
+_Last updated: 2026-05-18 (tools/augment_inspector.py 추가) | Updated by: claude-code_
 
 ---
 
@@ -215,10 +215,35 @@ _Last updated: 2026-05-17 (RPCA degenerate 입력 방어 추가) | Updated by: c
 | E2E 통합 테스트 | pending | - | - |
 | inference/ 모듈 (InferenceWorker + FallPredictor + SlidingWindowBuffer) | done | main | 2026-05-11 |
 | main 브랜치 통합 (server/dongseok + feature/pretrained-model) | done | main | 2026-05-11 |
+| tools/augment_inspector.py (증강 파라미터 검토용 시각화) | done | main | 2026-05-18 |
 
 ---
 
 ## Review Notes
+
+### 2026-05-18 — tools/augment_inspector.py 추가 (증강 파라미터 검토용 시각화)
+
+- **작업 범위:** SafeSignal 증강 4기법(jittering / scaling / time_warping / noise_scale)의 파라미터 강도를 단일 대표 윈도우 기준으로 사전 점검하는 inspector 스크립트. 학습용 전체 데이터셋 증강/저장 도구가 아니며, 실제 전체 증강은 추후 fine-tuning 파이프라인의 train split에서만 수행한다.
+- **파일:** `tools/augment_inspector.py` (신규). 기존 `model/augment/augment.py` 및 `model/preprocessing/pipeline.py`는 import만 사용, 수정 없음.
+- **재현성:** `np.random.SeedSequence(seed).spawn(4)`로 기법별 child seed 생성 → `jitter_rng / scaling_rng / warp_rng / noise_scale_rng` 독립 RNG 전달. 호출 순서 변경에도 안정적. 동일 seed 두 번 실행 시 3개 PNG 해시 완전 일치 확인(stats_summary.txt는 synthetic CSV 절대경로 한 줄만 다름).
+- **CLI:** `python tools/augment_inspector.py <csv_or_dir> [--out OUT] [--seed 42]` / `python tools/augment_inspector.py --synthetic` (path 없이 실행 가능, 합성 CSV는 출력 디렉터리에 저장).
+- **출력물 (tools/inspect_output/ 기본):**
+  - `sdp_distribution.png` — 전체 윈도우 z-score SDP 값 히스토그램 + mean/std/min/max/p5/p95
+  - `augmentation_heatmaps.png` — 2×3 subplot, 원본 + 4기법, 컬러바 범위는 원본 기준 고정
+  - `augmentation_diff_heatmaps.png` — 2×2 subplot, `augmented - original` diff, 대칭 컬러바
+  - `stats_summary.txt` — 입력 경로/seed/총 윈도우 수/resample metadata(`original_rate_hz`, `gap_count`, `max_gap_us`)/기법별 max·mean|Δ|·std 변화율(%)/jittering σ vs 원본 SDP std 비율 코멘트
+- **운영 가드:**
+  - matplotlib 백엔드 `Agg` 강제 (`matplotlib.use("Agg")`) — 헤드리스 환경 안전
+  - `PROJECT_ROOT`를 `sys.path` prepend → 임의 cwd 에서도 `model.*` import 가능
+  - 경로 미존재 / 디렉터리에 CSV 없음 / 윈도우 수 0 / 필수 패키지 미설치 → 명확한 에러 메시지 + 비정상 종료 코드
+  - 합성 CSV는 RPCA degenerate 방어를 통과하도록 정현파 + 작은 노이즈 포함 (constant 입력 회피)
+- **합성 데이터 sanity (seed=42):**
+  - jittering: `max|Δ|≈0.20`, std 변화 +0.15% — σ=0.05가 원본 z-score std≈1 대비 5% 수준, 합리적 범위
+  - scaling(0.8~1.2): `max|Δ|≈0.057`, std 변화 -1.30% — z-score 후 ±20% 배율은 형태 보존, 에너지만 조정
+  - time_warping: `max|Δ|≈0.092`, std 변화 -0.03% — 매핑이 [min, max] 안에서 동작, 분포 안정
+  - noise_scale: `max|Δ|≈0.72`, std 변화 -14.79% — 두 효과 결합으로 변형이 가장 큼
+- **검증:** `python -m py_compile`, `--synthetic`, `data/raw` 실 CSV 3종 케이스 모두 OK.
+- **주의:** 이 inspector의 적정성 코멘트는 빠른 sanity check 수준이다. 최종 파라미터 적정성은 train split 성능 + FAR 실측으로 확정해야 한다.
 
 ### 2026-05-17 — 발표자료 다이어그램 15종 제작 완료
 
