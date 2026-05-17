@@ -1,6 +1,6 @@
 ﻿# SafeSignal Project State
 
-_Last updated: 2026-05-17 (발표자료 다이어그램 15종 제작 완료) | Updated by: claude-ai_
+_Last updated: 2026-05-17 (SDP z-score ablation plan 추가) | Updated by: codex_
 
 ---
 
@@ -177,6 +177,16 @@ _Last updated: 2026-05-17 (발표자료 다이어그램 15종 제작 완료) | U
   - **결정 시점:** 자체수집 3명 합류·본격 수집 진입 직전. 그 시점에 (a)/(b)/(c) 중 채택안 결정 후 본 항목 status 갱신.
   - **그 외 항목(running 제외, 증강 train-only, fall 우선순위, 베이스라인 산출 항목)은 분할 방식과 독립이라 그대로 유효.**
 
+### [D-020] SDP z-score 정규화 적용 및 ablation 계획
+- **Date:** 2026-05-17
+- **Decided by:** user / codex review
+- **Content:**
+  - 현재 SDP 출력 `(28, 20)`에 window 단위 z-score 정규화를 추가하기로 결정.
+  - 1차 구현/적용안은 **A안 Global z-score**: `mean=sdp.mean()`, `std=sdp.std()`, `sdp=(sdp-mean)/(std+eps)`. A안은 ACF lag 간 상대 크기/decay 구조를 보존하면서 개인 간 진폭 편차와 Intel 5300 ↔ ESP32 scale gap을 완화하는 안정적 기본안으로 채택.
+  - **B안 Per-lag z-score**: `mean=sdp.mean(axis=0, keepdims=True)`, `std=sdp.std(axis=0, keepdims=True)`. B안은 각 lag별 시간축 변화량을 강조해 SafeSignal의 "낙상 순간 급격한 변화" 설명과 잘 맞지만, high-lag noise 과증폭 및 FAR 증가 가능성이 있어 ablation 후보로 유지.
+  - fine-tuning 진입 후 먼저 A안으로 학습한 모델의 평가 지표를 확보한 뒤, **동일 split**에서 B안 전처리로 재학습하여 지표를 비교하고 최종 정규화 방식을 결정.
+  - A/B 비교 시 `fall_recall`, `FAR`, `fall_f1`, confusion matrix, 특히 `walking/picking/sit_stand → fall` 오탐을 함께 확인. B안 적용 시 `std_floor`와 clipping(`[-5,5]` 또는 `[-3,3]`) 적용을 검토.
+- **Status:** confirmed for initial implementation; final normalization choice pending ablation
 ---
 
 ## Implementation Status
@@ -458,6 +468,7 @@ _Last updated: 2026-05-17 (발표자료 다이어그램 15종 제작 완료) | U
 - [x] self-collected 100Hz 리샘플 구현 (2026-05-13 완료. `model/preprocessing/resample.py` 신규 + loader/pipeline 확장. scipy `interp1d` 대신 `np.interp` 사용 — 결과 동일, 의존성 -1. ResampleResult metadata에 gap_count/max_gap_us/original_rate_hz 노출. Alsaify 경로 무변경.)
 - [ ] portable router 확보 시 70Hz 천장 해소 가능성 재평가, 리샘플 필요성 재판단 ([D-017]/[D-018] 후속)
 - [ ] fine-tuning 진입 전 `train.py`/캐시 빌더에 SafeSignal CSV 전용 경로 연결 (`preprocess_safesignal_file*`)
+- [ ] SDP z-score A안(Global)으로 1차 구현/학습/평가 후, 동일 split에서 B안(Per-lag) 재학습 ablation 수행 및 최종 정규화 방식 결정 ([D-020] 후속)
 - [ ] E2E 실시간 추론 단계에서 `server/inference/buffer.py`를 timestamp-aware 100Hz resampling buffer로 전환
 - [ ] `wifi_event_group` 미사용 잔재 변수 정리 (`csi_rx1_main.c:86`, RX2 동일)
 - [x] Alsaify 전체 사전학습 실행 (2026-05-14 팀원 결과 수령·로컬 적용 — best fall_recall=0.919 / F1=0.913 / FAR=0.022, meets_all_targets=true)
@@ -483,4 +494,6 @@ _Last updated: 2026-05-17 (발표자료 다이어그램 15종 제작 완료) | U
 | W5 | 2026-05-28 | E2E 통합, 2환경 검증 |
 | W6 | 2026-06-04 | Demo |
 | W7 | 2026-06-11 | 최종 발표 |
+
+
 
