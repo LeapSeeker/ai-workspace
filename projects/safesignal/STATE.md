@@ -1,6 +1,6 @@
 ﻿# SafeSignal Project State
 
-_Last updated: 2026-05-18 (tools/augment_inspector.py 추가) | Updated by: claude-code_
+_Last updated: 2026-05-18 (tools/augment_inspector.py 추가 + 리뷰 반영) | Updated by: claude-code_
 
 ---
 
@@ -244,6 +244,10 @@ _Last updated: 2026-05-18 (tools/augment_inspector.py 추가) | Updated by: clau
   - noise_scale: `max|Δ|≈0.72`, std 변화 -14.79% — 두 효과 결합으로 변형이 가장 큼
 - **검증:** `python -m py_compile`, `--synthetic`, `data/raw` 실 CSV 3종 케이스 모두 OK.
 - **주의:** 이 inspector의 적정성 코멘트는 빠른 sanity check 수준이다. 최종 파라미터 적정성은 train split 성능 + FAR 실측으로 확정해야 한다.
+- **2026-05-18 리뷰 반영 (follow-up):**
+  - 의존성 누락(numpy/matplotlib/pandas) ImportError 처리에서 `raise` 제거 → `sys.exit(1)`로 변경. 사용자용 CLI 도구라 traceback 노출 없이 안내 메시지만 stderr 출력하고 종료 코드 1로 종료.
+  - `stats_summary.txt`의 scaling 적정성 판단을 고정 문구에서 실측 기반 분기로 교체. `original_range`, `max|Δ|/original_range`, `mean|Δ|`, `std_change(%)` 출력 + 4단계 분기(`range<=1e-8` / `ratio<0.10` / `0.10≤ratio≤0.35` / `ratio>0.35`).
+  - 실 CSV `data/raw/E1_S01_A_STAND_T001.csv` 기준: `original_range=4.7759`, `max|Δ|/range=1.16%` → "scaling 영향이 약함" 분기. inspector의 z-score SDP에서 0.8~1.2 scaling은 다양성 기여가 제한적이며, 학습 단계에서 효과/대안 검토 필요.
 
 ### 2026-05-17 — 발표자료 다이어그램 15종 제작 완료
 
