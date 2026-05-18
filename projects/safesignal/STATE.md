@@ -1,6 +1,6 @@
 ﻿# SafeSignal Project State
 
-_Last updated: 2026-05-18 (tools/augment_inspector.py 추가 + 리뷰 반영) | Updated by: claude-code_
+_Last updated: 2026-05-18 (ACF lag0 제외 반영 + rclone Drive 업로드 구현 진행) | Updated by: codex_
 
 ---
 
@@ -165,17 +165,19 @@ _Last updated: 2026-05-18 (tools/augment_inspector.py 추가 + 리뷰 반영) | 
 - **Date:** 2026-05-14
 - **Decided by:** user / claude-code
 - **Content:**
-  - **분할:** 자체수집 240세션은 **subject 단위 2명 train + 1명 test 봉인** 분할. test 1명의 raw 데이터는 학습/증강/모델 선정/하이퍼파라미터 튜닝/threshold 결정에 일체 사용 금지. 어떤 subject(S01/S02/S03)를 test로 봉인할지는 **자체수집 본격 진입 시점에 사전 지정** (수집 종료 후 결정 금지 — 진행 중 leakage 차단 보장 불가).
-  - **흐름:** 3명 수집 완료 → 봉인 test로 현 best.pt 베이스라인 평가(6-class 기준) → train split만 증강(5×, D-010) → 파인튜닝(7-class) → 동일 test로 비교 평가. 베이스라인 vs 파인튜닝 개선폭은 6-class 교집합으로 보고하고 7-class 전체 metrics는 보조 지표.
+  - **분할:** [D-021]/[D-022] 반영 후 자체수집 540세션은 **3-fold cross-subject**로 평가한다. fold별 봉인 대상은 다음과 같다.
+    - Fold 1: test=S01, train=S02+S03
+    - Fold 2: test=S02, train=S01+S03
+    - Fold 3: test=S03, train=S01+S02
+  - 각 fold에서 test subject의 E4 포함 전체 raw 데이터는 학습/증강/모델 선정/하이퍼파라미터 튜닝/threshold 결정에 일체 사용 금지한다. `groups=subject` 기준의 non-overlapping group split으로 취급한다.
+  - **흐름:** 3명·4환경 수집 완료 → fold별 봉인 subject로 현 best.pt 베이스라인 평가(6-class 기준) → train split만 증강(5×, D-010/D-022) → fold별 파인튜닝(7-class) → 동일 fold test로 비교 평가. 베이스라인 vs 파인튜닝 개선폭은 6-class 교집합으로 보고하고 7-class 전체 metrics는 보조 지표.
   - **증강 적용 범위:** 학습 파이프라인의 train split 내부에서만 호출. test/val 에는 raw 그대로. `augment/augment.py` 호출 위치가 split 이후인지 코드 점검 항목으로 추가.
   - **running 클래스:** 사전학습 best.pt는 6-class (running 없음, D-006) → 베이스라인 평가에서 자체수집의 running 세션은 제외하고 6-class만 채점. 파인튜닝 모델은 7-class로 학습·평가.
-  - **fall 수집 우선순위:** D-011 핵심 지표가 fall_recall이고 fall 세션 부족 시 평가 자체가 무의미 → **수집 일정상 240세션 전부 못 채워도 fall 60(앉다→낙 30 + 서다→낙 30) 우선, walking/sit_stand 차순위, picking/lying 최후순위**.
-  - **베이스라인 평가 산출 항목 (필수):** 클래스별 confusion matrix, FALL_THRESHOLD sweep(0.3~0.7), subject별 metrics. 파인튜닝 설계 입력으로 사용.
-- **Status:** **임시 확정 (추가 논의 필요)** — 자체수집 본격 진입 전 재검토 결정. 검토 트리거:
-  - **검토 사유:** test=1명 구성의 통계적 검정력 문제(fall ~20세션 기준 recall 95% CI ≈ ±10~15%p → 베이스라인 vs 파인튜닝 개선폭 유의성 판단 어려움), test 1명 개인 편향, 학습 데이터 33% 손실로 파인튜닝 효과 제한, fall stratification 미보장, 봉인 대상자 일정 지연 시 평가 자체 risk.
-  - **재논의 후보:** (a) **3-fold cross subject** — fold마다 1명 test, 학습 3회로 variance↓·데이터 손실 0·CI 폭 ≈ ±5~8%p로 축소. RTX4060 30 epoch 약 30분 가정 시 추가 60분 비용. (b) 2+1 봉인 유지하되 test subject 사전 지정 + 동일 환경/시간대/장비 보장으로 environment confound 차단. (c) 자체수집 양 자체를 240→그 이상으로 확대해 1명 봉인 규모를 키움.
-  - **결정 시점:** 자체수집 3명 합류·본격 수집 진입 직전. 그 시점에 (a)/(b)/(c) 중 채택안 결정 후 본 항목 status 갱신.
-  - **그 외 항목(running 제외, 증강 train-only, fall 우선순위, 베이스라인 산출 항목)은 분할 방식과 독립이라 그대로 유효.**
+  - **fall 수집 우선순위:** D-011 핵심 지표가 fall_recall이고 fall 세션 부족 시 평가 자체가 무의미 → 수집 일정상 540세션 전부 못 채워도 각 subject·environment의 fall 30세션 우선, walking/sit_stand 차순위, picking/lying 최후순위.
+  - **베이스라인 평가 산출 항목 (필수):** fold별/subject별 클래스별 confusion matrix, FALL_THRESHOLD sweep(0.3~0.7), macro 평균과 subject별 metrics. 파인튜닝 설계 입력으로 사용.
+  - **보조 분석:** E4는 별도 환경 일반화 분석으로도 보고한다. 단, primary split은 3-fold cross-subject이며 E4-only 결과는 subject leakage 가능성이 있으므로 최종 성능의 단독 근거로 쓰지 않는다.
+- **Ref:** [scikit-learn GroupKFold](https://scikit-learn.org/stable/modules/generated/sklearn.model_selection.GroupKFold.html), [scikit-learn cross-validation user guide](https://scikit-learn.org/stable/modules/cross_validation.html), [statsmodels Wilson proportion CI](https://www.statsmodels.org/stable/generated/statsmodels.stats.proportion.proportion_confint.html)
+- **Status:** confirmed (2026-05-18 재검토 완료 — 3-fold cross-subject 채택, 봉인 대상 S01/S02/S03 fold별 명시)
 
 ### [D-020] SDP z-score 정규화 적용 및 ablation 계획
 - **Date:** 2026-05-17
@@ -187,6 +189,54 @@ _Last updated: 2026-05-18 (tools/augment_inspector.py 추가 + 리뷰 반영) | 
   - fine-tuning 진입 후 먼저 A안으로 학습한 모델의 평가 지표를 확보한 뒤, **동일 split**에서 B안 전처리로 재학습하여 지표를 비교하고 최종 정규화 방식을 결정.
   - A/B 비교 시 `fall_recall`, `FAR`, `fall_f1`, confusion matrix, 특히 `walking/picking/sit_stand → fall` 오탐을 함께 확인. B안 적용 시 `std_floor`와 clipping(`[-5,5]` 또는 `[-3,3]`) 적용을 검토.
 - **Status:** A안 Global z-score 구현 완료 (main `14bfb12` — 2026-05-17). `window_to_model_input()` SDP 직후에 `(sdp - sdp.mean()) / (sdp.std() + 1e-6)` 적용. Alsaify·SafeSignal 양 경로 공통. 후속으로 main `8c85920` (2026-05-17)에서 `rpca_sparse()`에 degenerate 입력 방어(nan/inf → ValueError, `np.std(D) < 1e-8` → zero S 조기 반환) 추가 — constant/zero 윈도우에서 RobustPCA `mu = N/(4·‖D‖₁)`가 inf로 발산하며 발생하던 RuntimeWarning(`divide by zero` / `invalid value in multiply`) 제거. 학습/평가 및 B안 ablation 비교는 pending. final normalization choice pending ablation.
+
+### [D-021] 자체수집 환경 구성 및 피험자 코드 확정
+- **Date:** 2026-05-18
+- **Decided by:** user / codex
+- **Content:**
+  - 자체수집 환경:
+    - E1: 주화 개인 주거 환경 — S01 단독 수집
+    - E2: 진규 개인 주거 환경 — S02 단독 수집
+    - E3: 동석 개인 주거 환경 — S03 단독 수집
+    - E4: 학교 실습 장소 — S01·S02·S03 3명 함께 수집
+  - 피험자 코드:
+    - S01 = 주화
+    - S02 = 진규
+    - S03 = 동석
+  - 펌웨어 NVS IP 수정 완료:
+    - TX(COM15): target `10.197.192.132:5000` → `192.168.137.1:5005`
+    - RX1(COM11): server `10.197.192.132:5005` → `192.168.137.1:5005`
+    - RX2(COM14): server `10.197.192.132:5005` → `192.168.137.1:5005`
+    - 수정 방법: `idf.py monitor` 상태에서 `set_target` / `set_server` 명령으로 NVS 갱신
+    - 검증: UDP 패킷 수신 정상 확인 완료 (`magic=0xab`, 224B, RX1·RX2 양쪽)
+- **Ref:** [D-007] UDP 패킷 구조, [collect/labels.py](https://github.com/LeapSeeker/wifi-csi-fall-detection/blob/main/collect/labels.py)
+- **Status:** confirmed
+
+### [D-022] 자체수집 전체 세션 수 재산정
+- **Date:** 2026-05-18
+- **Decided by:** user / codex
+- **Content:**
+  - 기존 private 환경 목표는 E1(S01) + E2(S02) + E3(S03) 합산 270세션으로 정리한다. 이는 `collect/labels.py` 구현 기준인 낙상 9종×10회=90세션, 비낙상 6종×30회=180세션과 일치한다.
+  - E4(학교 실습 장소)는 공용 공간 일반화 평가 후보 환경이므로 E1~E3 합산과 동일한 클래스 비율로 270세션을 추가 수집한다.
+  - 최종 자체수집 목표: **540세션**.
+    - E1: S01 90세션
+    - E2: S02 90세션
+    - E3: S03 90세션
+    - E4: S01 90세션 + S02 90세션 + S03 90세션 = 270세션
+  - 전체 클래스 합계:
+    - fall: 180세션
+    - walking / sit_stand / lying / standing / running / picking: 각 60세션
+    - non-fall 합계: 360세션
+  - 피험자별 90세션 구성:
+    - 비낙상: `SIT_STD`, `LIE`, `WALK`, `STAND`, `RUN`, `PICK` 각 10회 = 60세션
+    - 낙상: 9개 fall activity 합계 30세션. 각 subject별로 9종 중 3종은 4회, 나머지 6종은 3회 수행하여 subject당 30세션을 맞추고, S01/S02/S03의 extra 3회를 서로 다르게 배치해 환경 단위 합산 시 각 fall activity가 10회가 되도록 한다.
+  - fall extra 배치:
+    - S01: `FALL_SIT_F`, `FALL_STD_B`, `FALL_WALK_S` 각 4회, 나머지 fall activity 각 3회
+    - S02: `FALL_SIT_B`, `FALL_STD_S`, `FALL_WALK_F` 각 4회, 나머지 fall activity 각 3회
+    - S03: `FALL_SIT_S`, `FALL_STD_F`, `FALL_WALK_B` 각 4회, 나머지 fall activity 각 3회
+  - 이 구조는 D-019 재논의 후보인 subject 단위 분할, environment 단위 분할(E4 test), 3-fold cross-subject를 모두 열어둔다. 같은 subject가 private 환경과 E4 환경을 모두 가지므로 subject 일반화와 environment 일반화를 분리해서 평가할 수 있다.
+- **Ref:** [collect/labels.py](https://github.com/LeapSeeker/wifi-csi-fall-detection/blob/main/collect/labels.py), [scikit-learn GroupKFold](https://scikit-learn.org/stable/modules/generated/sklearn.model_selection.GroupKFold.html), [scikit-learn cross-validation user guide](https://scikit-learn.org/stable/modules/cross_validation.html)
+- **Status:** confirmed
 ---
 
 ## Implementation Status
@@ -216,10 +266,19 @@ _Last updated: 2026-05-18 (tools/augment_inspector.py 추가 + 리뷰 반영) | 
 | inference/ 모듈 (InferenceWorker + FallPredictor + SlidingWindowBuffer) | done | main | 2026-05-11 |
 | main 브랜치 통합 (server/dongseok + feature/pretrained-model) | done | main | 2026-05-11 |
 | tools/augment_inspector.py (증강 파라미터 검토용 시각화) | done | main | 2026-05-18 |
+| preprocessing/acf.py lag 정책 (lag0 제외, lag=1..20) | done | main `49f92be` | 2026-05-18 |
+| collect/drive_upload.py (rclone 기반 Google Drive 업로드) | in progress (local only, not pushed) | main working tree | 2026-05-18 |
 
 ---
 
 ## Review Notes
+
+### 2026-05-18 — ACF lag0 제외 및 Google Drive 업로드 구현 진행
+
+- **ACF/SDP 변경 완료 및 GitHub main 반영:** `model/preprocessing/acf.py`가 더 이상 lag=0 상수열(`rho_0=1`)을 반환하지 않고, shape `(28,20)`은 유지한 채 lag=1..20을 반환하도록 변경. `model/pretrained/train.py` 캐시 파일명에 `_lag1_20` 포함하여 기존 lag0 캐시 재사용을 방지. 관련 디버그/테스트/inspector 라벨도 `lag (1~20)`으로 갱신. 검증: `py_compile`, `debug/preprocessing/check_acf.py`, `debug/preprocessing/check_sdp.py`, `augment_inspector.py` synthetic/실제 WALK CSV 실행 통과. 커밋 `49f92be [수정] ACF lag0 제외 전처리 적용` 을 `origin/main`에 push 완료.
+- **데이터 재수집 필요 없음:** lag 정책 변경은 raw CSV 이후 전처리 단계 변경이므로 기존 자체수집 CSV는 재사용 가능. 단, 기존 전처리 캐시 및 기존 `best.pt`는 lag0 기준이므로 재사용 금지. 사전학습 캐시 재생성 및 사전학습 재실행 필요.
+- **Google Drive 업로드 구현 진행:** `collect/drive_upload.py` 신규 추가, `collect/collect_main.py`에서 `SessionRecorder.save_session()` 성공 후 `upload_file_async(path)` 호출하도록 로컬 구현. rclone 기반이며 환경변수 `SAFESIGNAL_DRIVE_UPLOAD=1`, `SAFESIGNAL_DRIVE_REMOTE=gdrive:SafeSignal/data/raw` 설정 시 업로드. 기본값은 비활성화라 기존 수집 동작 유지. 업로드 실패해도 로컬 CSV는 유지되고 `data/upload_log.md`에 성공/실패 기록. `.gitignore`에 `data/upload_log.md` 추가. 검증: `py_compile` 통과, 업로드 비활성 기본 경로 확인, remote 미설정 실패 로그 확인.
+- **주의:** Google Drive 업로드 변경은 아직 GitHub에 push하지 않은 로컬 작업트리 상태. rclone 설치 및 `rclone config`로 Google Drive remote 설정이 팀 환경에서 별도 필요.
 
 ### 2026-05-18 — tools/augment_inspector.py 추가 (증강 파라미터 검토용 시각화)
 
@@ -499,12 +558,14 @@ _Last updated: 2026-05-18 (tools/augment_inspector.py 추가 + 리뷰 반영) | 
 - [ ] portable router 확보 시 70Hz 천장 해소 가능성 재평가, 리샘플 필요성 재판단 ([D-017]/[D-018] 후속)
 - [ ] fine-tuning 진입 전 `train.py`/캐시 빌더에 SafeSignal CSV 전용 경로 연결 (`preprocess_safesignal_file*`)
 - [ ] SDP z-score A안(Global) 학습/평가 후, 동일 split에서 B안(Per-lag) 재학습 ablation 수행 및 최종 정규화 방식 결정 ([D-020] 후속. A안 구현 자체는 main `14bfb12`로 2026-05-17 완료)
+- [ ] ACF lag=1..20 기준으로 Alsaify 사전학습 캐시 재생성 및 `best.pt` 재학습 (`_lag1_20` 캐시 사용)
+- [ ] Google Drive 자동 업로드용 rclone 설치/설정 절차 팀원 PC에서 확정 (`SAFESIGNAL_DRIVE_UPLOAD`, `SAFESIGNAL_DRIVE_REMOTE`)
 - [ ] E2E 실시간 추론 단계에서 `server/inference/buffer.py`를 timestamp-aware 100Hz resampling buffer로 전환
 - [ ] `wifi_event_group` 미사용 잔재 변수 정리 (`csi_rx1_main.c:86`, RX2 동일)
 - [x] Alsaify 전체 사전학습 실행 (2026-05-14 팀원 결과 수령·로컬 적용 — best fall_recall=0.919 / F1=0.913 / FAR=0.022, meets_all_targets=true)
 - [x] `preprocess_directory()`에 `tail_window` 옵션 추가 (윈도우-only 디버깅/분석 API 일관성 보완)
 - [ ] Sliding window size 실험적 결정 (데이터 수집 후)
-- [ ] 자체 수집 계획 최종 구조 확정 (W3 이전)
+- [x] 자체 수집 계획 최종 구조 확정 (2026-05-18 완료. [D-021] 환경·피험자 코드 확정, [D-022] E1~E4 총 540세션 목표 확정)
 - [ ] 보호자 알림 상세 시나리오 확정 (동석 담당, SOLAPI vs KakaoTalk 포함)
 - [ ] ESP32 3대 배터리 런타임 정량화
 - [ ] GitHub 브랜치 전략 확정
