@@ -1,6 +1,6 @@
 ﻿# SafeSignal Project State
 
-_Last updated: 2026-05-18 (ACF lag=1..20 Alsaify 재학습 best.pt 적용, fall_recall=0.922 / f1=0.902 / FAR=0.029) | Updated by: claude-code_
+_Last updated: 2026-05-19 (Pi4 프로토콜/실시간 추론 버퍼 검증 + SMS 실기 확인) | Updated by: codex_
 
 ---
 
@@ -271,6 +271,21 @@ _Last updated: 2026-05-18 (ACF lag=1..20 Alsaify 재학습 best.pt 적용, fall_
 ---
 
 ## Review Notes
+
+### 2026-05-19 — Pi4 프로토콜/실시간 추론 버퍼 검증 및 SMS 실기 확인
+
+- 검증 주체: Claude Code 실행 결과를 사용자 공유, Codex가 STATE에 반영.
+- 의존성: `.venv` 기준 주요 패키지 import 검증에서 `solapi`만 미설치였으나, 이후 사용자가 `solapi` 설치 및 import 확인 완료.
+- 문법 검증: 서버/추론/WebSocket/protocol/test/collect 관련 Python 파일 21개 `py_compile` 통과.
+- self-check: `python server/inference/_selfcheck.py` → `ALL_OK` (6/6), `python collect/_selfcheck.py` → `ALL_OK` (8/8).
+- Pi4 payload 검증: `server/protocol/pi4_messages.py`의 `build_fall_alert_payload()`가 기존 포맷 `{event:"fall_detected", label:"fall", confidence, seq_num, timestamp_us}`를 그대로 생성하며 JSON 직렬화 정상.
+- 실시간 추론 버퍼 검증: 70Hz raw timestamp 입력에서 첫 trigger가 211 packets 지점에 발생(`<300`), `get_window()` shape `(300,104)`, `window_timestamp_us != 0`, 첫 raw timestamp 기준 윈도우 끝까지 정확히 3.000s로 확인. packet-count 300개 대기 문제가 해결됨.
+- 낙상 라벨 매핑 검증: pretrained 6-class 기준 `fall_class_indices=(0,)`, fine-tuned 7-class 시뮬레이션 기준 `fall_class_indices=(0,1,2)`로 `FALL_LABELS` 기반 다중 낙상 라벨 판정 정상.
+- 모델 로드 검증: 실제 `model/pretrained/checkpoints/best.pt`를 CPU에서 warning 없이 로드했고 dummy `predict()` 결과 softmax 합이 1.000000으로 확인됨.
+- 서버 smoke/E2E 검증: `python server/main.py` background 실행 시 UDP 5005, WebSocket 8765, Flask 8080 bind OK, InferenceWorker spawn OK. Pi4 시뮬레이터 WebSocket 연결 후 `/trigger_fall` 호출로 `{"event":"fall_detected","label":"fall","confidence":0.0,"seq_num":0,"timestamp_us":...}` 수신 확인. `timestamp_us=0` 입력 시 서버 현재 Unix us fallback 정상(D-016).
+- SMS 실기 검증: 사용자가 실제 SMS 발송 테스트를 수행했고 문제 없이 동작함을 확인.
+- 남은 선택 사항: `ws_handler/rpi_connection.py`, `notification/sms.py`의 일부 `print()` 로그는 백그라운드 리다이렉트 시 buffering될 수 있어 logger 전환 시 가시성 개선 가능. 기능 결함은 아님.
+- 현 상태 판단: 서버 낙상 알림 기본 흐름(추론 결과 처리 → Pi4 JSON → SMS)은 데모 기본 흐름 기준 검증 완료. 실제 Raspberry Pi 4 장치 수신/오디오/버튼 흐름은 별도 장치/브랜치에서 확인 필요.
 
 ### 2026-05-18 — Pi4 낙상 JSON 단일 소스화 및 일반 행동 저장 지점 분리
 
@@ -599,6 +614,8 @@ _Last updated: 2026-05-18 (ACF lag=1..20 Alsaify 재학습 best.pt 적용, fall_
 | W5 | 2026-05-28 | E2E 통합, 2환경 검증 |
 | W6 | 2026-06-04 | Demo |
 | W7 | 2026-06-11 | 최종 발표 |
+
+
 
 
 
