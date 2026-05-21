@@ -1,6 +1,6 @@
 ﻿# SafeSignal Project State
 
-_Last updated: 2026-05-21 (fine-tuning freeze 정책 정정) | Updated by: codex_
+_Last updated: 2026-05-21 (STATE 충돌 문구 정정) | Updated by: codex_
 
 ---
 
@@ -60,7 +60,7 @@ _Last updated: 2026-05-21 (fine-tuning freeze 정책 정정) | Updated by: codex
 - **Date:** 2026-05-09
 - **Decided by:** claude-ai
 - **Content:** Alsaify LOS (E1+E2) 사용. UT-HAR 제외. NLOS (E3) 제외 (향후 확장 가능성만 보존).
-  - Intel 5300, 90 subcarriers, 320Hz, 30 subjects × 5 experiments × 20 trials
+  - Intel 5300, 30 subcarriers × 3 Rx antenna = 90 CSI feature columns, 320Hz, 30 subjects × 5 experiments × 20 trials
   - 클래스 매핑: fall(A2+A5)=800, walking(A6+A8)=800, sit_stand(A10+A11)=800, lying(A3,C1+C2)=800, standing(A4,C2+C4)=800, picking(A12)=400 → 총 4,400 samples
   - running 클래스: Alsaify 해당 없음 → fine-tuning 전용
 - **Ref:** https://data.mendeley.com/datasets/v38wjmz6f6/1 / https://doi.org/10.1016/j.dib.2020.106534
@@ -155,7 +155,7 @@ _Last updated: 2026-05-21 (fine-tuning freeze 정책 정정) | Updated by: codex
 - **Decided by:** user / claude-code (진단 결과)
 - **Content:**
   - 자체수집은 Windows 모바일 핫스팟 환경에서 페어 rate ~70Hz 천장. STAND/WALK 활동 무관, 거리·안테나(1m 밀집 + 정렬)·채널(11→1) 변경 모두 ±5/s 안(세션 변동 범위). 펌웨어 STATS 로그상 `cb≈125~150/s, match≈60~75/s, sent==match, qfull=0, fail=0` — 큐/UDP/페어링 무손실, ~30% TX 프레임이 RX 라디오 demod 단계 이전에 손실. 약 5~7초 주기의 cb dip(절반 수준)이 채널 11/1 동일 발생 → Windows 모바일 핫스팟 스택의 주기 백그라운드 작업으로 추정. 펌웨어/채널 변경으로 회피 불가.
-  - 결정: self-collected CSV는 **전처리 로더 단계에서 timestamp 기반 100Hz 균일 격자 보간 리샘플** 적용. scipy `interp1d` 선형 보간, 캡처 범위 안쪽만 채움(외삽 없음). Alsaify는 이미 100Hz라 미적용.
+  - 결정: self-collected CSV는 **전처리 로더 단계에서 timestamp 기반 100Hz 균일 격자 보간 리샘플** 적용. scipy `interp1d` 선형 보간, 캡처 범위 안쪽만 채움(외삽 없음). Alsaify는 기존 pretrained 전처리 경로에서 320Hz → 100Hz downsample을 적용하므로 SafeSignal timestamp 보간 경로는 미적용.
   - 적용 위치: `model/preprocessing/loader.py` (또는 self-collected 전용 로더). 원본 CSV는 그대로 두고 로딩 단계에서만 변환. 실시간 추론 측은 별도 검토 — 페어 incoming 시점에 동일 보간 적용 필요(stride 누적 + 시점 보간).
   - 가시화 보강: `collect/collect_main.py` `_run_session` 출력에 `pair_rate` / `capture_ratio` 추가, 운용 중 천장 변동 즉시 확인.
   - 라우터 확보 시 리샘플 필요성 재평가 — Pending Items에 등록.
@@ -248,7 +248,7 @@ _Last updated: 2026-05-21 (fine-tuning freeze 정책 정정) | Updated by: codex
   - **방향 변이:** side fall을 별도 activity로 수집하지 않는 대신 forward/backward 낙상은 방향을 유지한 범위에서 제한적 각도 변이를 포함한다. 권장: 각 fall activity 10회 중 중앙 4회 + 좌대각 3회 + 우대각 3회, 대략 ±30도 이내. 90도에 가까운 실제 side fall은 F/B label에 섞지 않는다.
   - **기존 side CSV 처리:** 이미 수집된 `FALL_*_S` CSV가 있으면 기본 train/validation/test에서 제외하고, 제외 파일 수를 로그에 출력한다.
   - **Loss:** baseline은 unweighted `CrossEntropyLoss`. ablation은 fall class custom weight 1.2 / 1.5를 비교한다. inverse-frequency weighted CE는 7-class 기준에서 fall weight를 낮춰 fall recall 우선 전략과 충돌하므로 사용하지 않는다. fall weight 2.0 이상은 FAR 증가 위험으로 기본 후보에서 제외한다.
-  - **Backbone freeze:** 기본 fine-tuning은 partial freeze로 확정한다. CNN feature extractor와 GRU는 freeze하고, attention layer와 classifier head만 학습한다. layer별 learning rate는 classifier `1e-3`, attention `3e-4`를 기본값으로 둔다. full unfreeze는 partial freeze 수렴 후 선택적 ablation으로만 수행하며, 낮은 lr(`1e-5`~`3e-5`)로 짧게 검증한다.
+  - **Backbone freeze:** 이 항목의 partial freeze 기본안은 [D-027]로 대체됨. 최종 fine-tuning 정책은 combined training + full unfreeze + 5 epoch warmup이다.
   - **Threshold 선택:** fold별 test 최적화는 test leakage로 간주하고 금지한다. train split 내부 validation prediction을 3-fold 전체에서 pooled하여 global threshold 1개를 선택한 뒤, 모든 fold test에 동일 threshold를 고정 적용한다.
   - **Threshold selection rule:** ① `fall_recall ≥ 0.90` and `FAR ≤ 0.10` 만족 threshold 중 `fall_f1` 최대, ② 없으면 공식 목표 `fall_recall ≥ 0.85` and `FAR ≤ 0.15` 만족 threshold 중 `fall_f1` 최대, ③ 없으면 recall 우선 및 FAR 초과폭 최소 threshold 선택 후 별도 표시한다.
   - **Checkpoint:** `last.pt`, `best_val_loss.pt`, `best_operating.pt`를 저장한다. 최종 배포/보고 기준은 `best_operating.pt`이며, `best_fall_recall.pt`는 저장하더라도 참고용으로만 취급한다.
@@ -341,15 +341,15 @@ _Last updated: 2026-05-21 (fine-tuning freeze 정책 정정) | Updated by: codex
 
 ### 2026-05-20 — combined training fine-tuning train.py 골격 구현 및 검토
 
-- 검토/구현 범위: `model/finetune/train.py` 신규 골격 작성 및 Claude Code 후속 수정 결과를 Codex가 재검토. 현재 파일은 `wifi-csi-fall-detection` working tree에서 untracked 상태이며 git commit/push는 수행하지 않음.
+- 검토/구현 범위: `model/finetune/train.py` 신규 골격 작성 및 Claude Code 후속 수정 결과를 Codex가 재검토. 현재 파일은 `codex/finetune-train-skeleton` 브랜치에 커밋 및 push 완료됨.
 - 데이터/학습 정책 반영: Alsaify + SafeSignal combined training, 7-class(`fall/walking/sit_stand/lying/standing/running/picking`), Alsaify 6-class `picking` label 5 → fine-tuning index 6 remap, SafeSignal-only `running` index 5, side-fall(`FALL_*_S`) filename 기반 학습 제외 로그.
-- 모델 정책 반영: pretrained 6-class head → 7-class head migration 구현(`new[0:5]=old[0:5]`, `new[5]` re-init, `new[6]=old[5]`), combined training 기준 full unfreeze + 5 epoch backbone warmup 구조 유지. D-023의 partial-freeze 기본안과의 정책 정렬은 후속 결정 필요.
+- 모델 정책 반영: pretrained 6-class head → 7-class head migration 구현(`new[0:5]=old[0:5]`, `new[5]` re-init, `new[6]=old[5]`), combined training 기준 full unfreeze + 5 epoch backbone warmup 구조 유지. D-027에 따라 full unfreeze + 5 epoch warmup이 최종 정책으로 정렬 완료.
 - Sampler 정책 반영: `WeightedRandomSampler`에 source ratio와 SafeSignal hard non-fall class weight 적용. 후속 수정으로 class weight가 source mass를 침범하지 않도록 source별 raw weight 합 정규화 적용 완료(`source_ratio=0.60`이면 SafeSignal weight 합 0.60, Alsaify 0.40 유지).
 - 증강 leakage 방지: SafeSignal 공식 cache는 raw-only 전제로 두고, `is_augmented=True`, non-empty `augment_type`, filename 증강 marker(`_AUG`, `AUGMENT`, `JITTER`, `SCALING`, `TIMEWARP`, `NOISE`)가 감지되면 즉시 에러. 증강은 split 이후 `TrainAugmentDataset`에서 train subset에만 적용하는 구조로 고정하되 실제 증강 구현은 TODO. SafeSignal 7,200은 원본 수집 세션 수가 아니라 원본 1,440세션 기준 train 증강 5배 적용 시 가능한 최대 학습 샘플 규모로 표기한다.
 - Validation/Test 구조: SafeSignal primary validation, Alsaify+SafeSignal auxiliary validation, SafeSignal sealed 3-fold cross-subject test 구조 반영. 현재 단일 fold runner이며 3-fold pooled threshold 및 mean pass/fail 집계 드라이버는 후속 작업.
 - Checkpoint/threshold 정책: `last.pt`, `best_val_loss.pt`, `best_operating.pt` 저장, threshold sweep 0.30~0.70(step 0.05), sealed test 전 `best_operating.pt` reload. checkpoint args 내 `Path`는 PyTorch 2.6+ `weights_only=True` reload 문제를 피하도록 string 직렬화.
 - 검증 결과(Claude Code 실행 보고 + Codex 확인): `python -m py_compile model/finetune/train.py` 통과. synthetic sampler mass test, Alsaify remap, head migration, raw-only/augmented cache guard, dummy dry-run 1 epoch CPU 검증 통과 보고. Codex도 py_compile 및 핵심 구현 라인 재확인 완료.
-- 남은 TODO: SafeSignal CSV→raw window cache builder, Alsaify pretrained 전처리 경로 기반 fine-tuning cache builder, `TrainAugmentDataset` 실제 증강 연결, 최종 eval/report 확장, 3-fold pooled global threshold selector 및 mean pass/fail 집계, full unfreeze vs partial freeze 및 GRU warmup 포함 여부 정책 확정.
+- 남은 TODO: SafeSignal CSV→raw window cache builder, Alsaify pretrained 전처리 경로 기반 fine-tuning cache builder, `TrainAugmentDataset` 실제 증강 연결, 최종 eval/report 확장, 3-fold pooled global threshold selector 및 mean pass/fail 집계, full unfreeze + warmup 정책은 D-027로 확정. GRU warmup 포함 여부는 코드 설명/optimizer group 정리 시 확인.
 
 ### 2026-05-19 — Pi4 프로토콜/실시간 추론 버퍼 검증 및 SMS 실기 확인
 
@@ -667,6 +667,14 @@ _Last updated: 2026-05-21 (fine-tuning freeze 정책 정정) | Updated by: codex
 - D-023에 남아 있던 partial freeze 기본안은 최신 결정과 불일치한다. 현재 최종 정책은 combined training + full unfreeze + 5 epoch warmup이다.
 - 다음 코드 작업에서는 `model/finetune/train.py`의 full unfreeze + warmup 구현을 유지하고, 문서/주석/CLI 설명만 이 결정과 일치하도록 정리한다.
 
+### 2026-05-21 — STATE 충돌 문구 정정
+
+- D-006의 Alsaify 구조 표현을 `90 subcarriers`에서 `30 subcarriers × 3 Rx antenna = 90 CSI feature columns`로 정정했다.
+- D-018의 `Alsaify는 이미 100Hz` 표현을 기존 pretrained 전처리 경로에서 `320Hz → 100Hz downsample`을 적용한다는 표현으로 정정했다.
+- D-023의 partial freeze 문구는 D-027로 대체됨을 명시했다. 최종 정책은 combined training + full unfreeze + 5 epoch warmup이다.
+- 2026-05-20 fine-tuning Review Notes의 `train.py untracked` 표현을 `codex/finetune-train-skeleton` 브랜치 commit/push 완료로 정정했다.
+- 같은 Review Notes의 `partial-freeze 정책 정렬 필요` 문구를 D-027 기준 정렬 완료로 정정했다.
+
 ## Pending Items
 
 - [ ] 일반 행동 추론 결과 저장 방식 결정 및 구현 (JSONL/CSV/SQLite 중 선택). Pi4 실시간 전송은 낙상 알림 전용으로 유지하고, non-fall 결과는 서버에 축적하여 1주일 단위 생활 패턴 감소 분석에 활용.
@@ -709,6 +717,7 @@ _Last updated: 2026-05-21 (fine-tuning freeze 정책 정정) | Updated by: codex
 | W5 | 2026-05-28 | E2E 통합, 2환경 검증 |
 | W6 | 2026-06-04 | Demo |
 | W7 | 2026-06-11 | 최종 발표 |
+
 
 
 
