@@ -1,6 +1,6 @@
 ﻿# SafeSignal Project State
 
-_Last updated: 2026-05-21 (HPO 확정 및 패킷 동기화/보간 품질 보완 기록) | Updated by: codex_
+_Last updated: 2026-05-21 (fine-tuning freeze 정책 정정) | Updated by: codex_
 
 ---
 
@@ -290,6 +290,17 @@ _Last updated: 2026-05-21 (HPO 확정 및 패킷 동기화/보간 품질 보완 
   - 다만 공유기를 사용해도 해당 채널을 독점하는 것은 아니므로 주변 AP의 동일 채널/인접 채널 사용, 신호 세기, 다중경로 변화로 인한 WiFi 간섭은 남는다. 이는 CSI 기반 시스템의 구조적 한계로 취급한다.
   - 패킷 손실률은 1~2%면 거의 문제 없고, 10~15%는 100Hz 보간과 window 기반 모델로 사용 가능할 가능성이 있으나 완전한 상태는 아니다. 평균 손실률보다 낙상 순간 근처의 연속 gap, timestamp gap, pair delay 분포가 더 중요하다.
   - 라우터 확보 시 리샘플 필요성 자체를 폐기하기보다, 채널 고정 후 pair rate, loss rate, max gap, pair delay 분포가 얼마나 개선되는지 재평가한다.
+- **Status:** confirmed
+
+### [D-027] Fine-tuning freeze 정책 정정: full unfreeze + warmup 확정
+- **Date:** 2026-05-21
+- **Decided by:** user / claude-ai / codex
+- **Content:**
+  - [D-023]의 partial freeze 기본안은 이후 combined training 논의 결과로 대체한다. 최종 fine-tuning 정책은 **combined training + full unfreeze + warmup**으로 확정한다.
+  - 이유: Alsaify pretrained model이 validation 지표는 높았지만 SafeSignal 실제 환경에서 sitting/static 상황의 fall false positive가 반복되었고, 이는 단순 classifier head 문제가 아니라 도메인 특성 차이로 인한 backbone feature/temporal representation mismatch 가능성이 크다. 따라서 attention/head만 학습하는 partial freeze보다 backbone까지 낮은 learning rate로 적응시키는 full unfreeze가 목적에 더 맞다.
+  - warmup은 5 epoch 고정으로 둔다. warmup 동안 backbone lr은 `1e-5`, 이후 `1e-4`로 증가한다. attention lr은 `3e-4`, head lr은 `1e-3`을 기본값으로 둔다.
+  - warmup 5 epoch 동안 early stopping/pruning은 비활성화한다. early stopping 감시는 epoch 10부터 시작한다.
+  - partial freeze는 기본 정책이 아니라 ablation 또는 fallback 후보로만 남긴다.
 - **Status:** confirmed
 
 ---
@@ -651,6 +662,11 @@ _Last updated: 2026-05-21 (HPO 확정 및 패킷 동기화/보간 품질 보완 
 - 오프라인/실시간 100Hz 선형보간 정책은 방향이 일관되지만, realtime buffer에서 `max_gap_ms`가 실제 skip/warn 조건으로 쓰이지 않는 차이가 있다. 큰 timestamp gap은 보간으로 메우기보다 품질 경고 또는 window 제외 후보로 다룬다.
 - 공유기 사용은 핫스팟 대비 채널 고정과 재현성 개선에는 유효하지만 주변 AP와의 채널 공유/간섭은 제거하지 못한다. 수집 품질 평가는 평균 loss rate뿐 아니라 연속 gap, timestamp gap, pair delay를 함께 본다.
 
+### 2026-05-21 — freeze 정책 정정
+
+- D-023에 남아 있던 partial freeze 기본안은 최신 결정과 불일치한다. 현재 최종 정책은 combined training + full unfreeze + 5 epoch warmup이다.
+- 다음 코드 작업에서는 `model/finetune/train.py`의 full unfreeze + warmup 구현을 유지하고, 문서/주석/CLI 설명만 이 결정과 일치하도록 정리한다.
+
 ## Pending Items
 
 - [ ] 일반 행동 추론 결과 저장 방식 결정 및 구현 (JSONL/CSV/SQLite 중 선택). Pi4 실시간 전송은 낙상 알림 전용으로 유지하고, non-fall 결과는 서버에 축적하여 1주일 단위 생활 패턴 감소 분석에 활용.
@@ -660,7 +676,7 @@ _Last updated: 2026-05-21 (HPO 확정 및 패킷 동기화/보간 품질 보완 
 - [ ] PS 비활성화 효과 검증 종료 후 RX1/RX2 디버그 카운터·stats_task 정리 (`csi_rx1_main.c`, `csi_rx2_main.c`) — 라우터 환경 재평가 마친 뒤 진행 권장 (D-018 후속)
 - [x] self-collected 100Hz 리샘플 구현 (2026-05-13 완료. `model/preprocessing/resample.py` 신규 + loader/pipeline 확장. scipy `interp1d` 대신 `np.interp` 사용 — 결과 동일, 의존성 -1. ResampleResult metadata에 gap_count/max_gap_us/original_rate_hz 노출. Alsaify 경로 무변경.)
 - [ ] portable router 확보 시 70Hz 천장 해소 가능성 재평가, 리샘플 필요성 재판단 ([D-017]/[D-018] 후속)
-- [ ] fine-tuning 후속 구현: SafeSignal CSV→raw window cache builder, Alsaify fine-tuning cache builder, TrainAugmentDataset 실제 증강 연결, 최종 eval/report 확장, 3-fold pooled global threshold selector 및 mean pass/fail 집계, full unfreeze vs partial freeze 정책 확정 (2026-05-20: combined training `model/finetune/train.py` 골격/안전장치 구현 및 검증 완료, local untracked)
+- [ ] fine-tuning 후속 구현: SafeSignal CSV→raw window cache builder, Alsaify fine-tuning cache builder, TrainAugmentDataset 실제 증강 연결, 최종 eval/report 확장, 3-fold pooled global threshold selector 및 mean pass/fail 집계, full unfreeze + warmup 정책 반영 확인 (2026-05-20: combined training `model/finetune/train.py` 골격/안전장치 구현 및 검증 완료, local untracked)
 - [ ] SDP z-score A안(Global) 학습/평가 후, 동일 split에서 B안(Per-lag) 재학습 ablation 수행 및 최종 정규화 방식 결정 ([D-020] 후속. A안 구현 자체는 main `14bfb12`로 2026-05-17 완료)
 - [x] ACF lag=1..20 기준으로 Alsaify 사전학습 캐시 재생성 및 `best.pt` 재학습 (`_lag1_20` 캐시 사용) (2026-05-18 완료. `dataset_cache_e12_w300_s300_lag1_20_tail_ps.npz` 기반 30epoch 재학습 — best=epoch7: fall_recall=0.922 / fall_f1=0.902 / FAR=0.029 / acc=0.791, meets_all_targets=true. lag0 포함 버전(recall=0.919/f1=0.913/FAR=0.022/acc=0.810) 대비 recall +0.003, f1 -0.011, FAR +0.007, acc -0.019 — 거의 동등. D-011 stretch(recall≥0.90) 충족)
 - [ ] Google Drive 자동 업로드용 rclone 설치/설정 절차 팀원 PC에서 확정 (`SAFESIGNAL_DRIVE_UPLOAD`, `SAFESIGNAL_DRIVE_REMOTE`)
@@ -693,6 +709,7 @@ _Last updated: 2026-05-21 (HPO 확정 및 패킷 동기화/보간 품질 보완 
 | W5 | 2026-05-28 | E2E 통합, 2환경 검증 |
 | W6 | 2026-06-04 | Demo |
 | W7 | 2026-06-11 | 최종 발표 |
+
 
 
 
