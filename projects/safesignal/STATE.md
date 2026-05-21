@@ -1,6 +1,6 @@
 ﻿# SafeSignal Project State
 
-_Last updated: 2026-05-19 (Pi4 프로토콜/실시간 추론 버퍼 검증 + SMS 실기 확인) | Updated by: codex_
+_Last updated: 2026-05-21 (HPO 확정 및 패킷 동기화/보간 품질 보완 기록) | Updated by: codex_
 
 ---
 
@@ -236,6 +236,62 @@ _Last updated: 2026-05-19 (Pi4 프로토콜/실시간 추론 버퍼 검증 + SMS
   - 이 구조는 D-019의 3-fold cross-subject 평가를 유지한다. 같은 subject가 private 환경과 E4 환경을 모두 가지므로 subject 일반화와 environment 일반화를 분리해서 보조 분석할 수 있다.
 - **Ref:** [collect/labels.py](https://github.com/LeapSeeker/wifi-csi-fall-detection/blob/main/collect/labels.py), [scikit-learn GroupKFold](https://scikit-learn.org/stable/modules/generated/sklearn.model_selection.GroupKFold.html), [scikit-learn cross-validation user guide](https://scikit-learn.org/stable/modules/cross_validation.html)
 - **Status:** confirmed
+
+### [D-023] SafeSignal fine-tuning 데이터 축소 및 학습/검증 기준 확정
+- **Date:** 2026-05-19
+- **Decided by:** user / claude-ai / codex
+- **Content:**
+  - **Class 구성:** fine-tuning은 `running`을 포함한 7-class로 진행한다. 최종 순서는 `fall`, `walking`, `sit_stand`, `lying`, `standing`, `running`, `picking`으로 둔다.
+  - **pretrained head 이식:** 현재 `best.pt`는 6-class이며 `classifier.1.weight` shape은 `(6, 256)`, class 목록은 `fall`, `walking`, `sit_stand`, `lying`, `standing`, `picking`이다. 7-class head로 교체할 때 기존 `picking` weight를 새 index 6으로 옮기고, 새 `running` row(index 5)는 새로 초기화한다. 단순 앞 6행 복사는 `picking` weight가 `running` 자리에 들어가므로 금지한다.
+  - **fall 세션 축소:** 수집 부담과 class imbalance 완화를 위해 side fall activity 3종(`FALL_SIT_S`, `FALL_STD_S`, `FALL_WALK_S`)은 fine-tuning 기본 수집/학습/평가 범위에서 제외한다. 신규 수집은 `FALL_*_F`, `FALL_*_B` 6종 × 10회 = fall 60세션, non-fall 6종 × 30회 = 180세션, env/subject 조합당 총 240세션으로 진행한다.
+  - **fine-tuning 수집 규모:** 대상 env-subject 조합은 6개(`E1-S01`, `E2-S02`, `E3-S03`, `E4-S01`, `E4-S02`, `E4-S03`)로 둔다. 조합당 240 원본 세션이므로 SafeSignal 원본 총합은 1,440세션이다. 증강 5배 기준의 최대 학습 샘플 규모는 7,200개이나, 이는 수집 세션 수가 아니라 train split에만 증강을 적용했을 때의 학습 샘플 규모로 표현한다. validation/test는 raw-only 유지한다.
+  - **방향 변이:** side fall을 별도 activity로 수집하지 않는 대신 forward/backward 낙상은 방향을 유지한 범위에서 제한적 각도 변이를 포함한다. 권장: 각 fall activity 10회 중 중앙 4회 + 좌대각 3회 + 우대각 3회, 대략 ±30도 이내. 90도에 가까운 실제 side fall은 F/B label에 섞지 않는다.
+  - **기존 side CSV 처리:** 이미 수집된 `FALL_*_S` CSV가 있으면 기본 train/validation/test에서 제외하고, 제외 파일 수를 로그에 출력한다.
+  - **Loss:** baseline은 unweighted `CrossEntropyLoss`. ablation은 fall class custom weight 1.2 / 1.5를 비교한다. inverse-frequency weighted CE는 7-class 기준에서 fall weight를 낮춰 fall recall 우선 전략과 충돌하므로 사용하지 않는다. fall weight 2.0 이상은 FAR 증가 위험으로 기본 후보에서 제외한다.
+  - **Backbone freeze:** 기본 fine-tuning은 partial freeze로 확정한다. CNN feature extractor와 GRU는 freeze하고, attention layer와 classifier head만 학습한다. layer별 learning rate는 classifier `1e-3`, attention `3e-4`를 기본값으로 둔다. full unfreeze는 partial freeze 수렴 후 선택적 ablation으로만 수행하며, 낮은 lr(`1e-5`~`3e-5`)로 짧게 검증한다.
+  - **Threshold 선택:** fold별 test 최적화는 test leakage로 간주하고 금지한다. train split 내부 validation prediction을 3-fold 전체에서 pooled하여 global threshold 1개를 선택한 뒤, 모든 fold test에 동일 threshold를 고정 적용한다.
+  - **Threshold selection rule:** ① `fall_recall ≥ 0.90` and `FAR ≤ 0.10` 만족 threshold 중 `fall_f1` 최대, ② 없으면 공식 목표 `fall_recall ≥ 0.85` and `FAR ≤ 0.15` 만족 threshold 중 `fall_f1` 최대, ③ 없으면 recall 우선 및 FAR 초과폭 최소 threshold 선택 후 별도 표시한다.
+  - **Checkpoint:** `last.pt`, `best_val_loss.pt`, `best_operating.pt`를 저장한다. 최종 배포/보고 기준은 `best_operating.pt`이며, `best_fall_recall.pt`는 저장하더라도 참고용으로만 취급한다.
+  - **Pass/Fail:** 공식 통과 기준은 3-fold mean 기준 `fall_recall ≥ 0.85`, `mean FAR ≤ 0.15`, `fall_f1 ≥ 0.85`. stretch 기준은 `fall_recall ≥ 0.90`, `mean FAR ≤ 0.10`.
+  - **Fold flag:** 평균 기준과 별도로 fold outlier를 flag로 보고한다. `WARN_FAR_FOLD`: fold FAR > 0.15, `HIGH_RISK_FAR_FOLD`: fold FAR > 0.20, `WARN_RECALL_FOLD`: fold recall < 0.85, `HIGH_RISK_RECALL_FOLD`: fold recall < 0.75.
+  - **재수집 후보:** HIGH_RISK flag가 발생하거나 `running/picking/sit_stand/walking → fall` 오탐이 여러 fold 또는 동일 subject의 private/E4 환경에서 반복되면 해당 subject/action 재수집 또는 추가 수집 후보로 판단한다. 단일 fold의 WARN 수준 이탈은 전체 실패가 아니라 subject/environment 특성 주석으로 처리한다.
+  - **검증기 출력:** global threshold, mean metrics + pass/fail, fold별 metrics/flag, confusion matrix, 반복 오탐 패턴, excluded side-fall file count를 출력한다.
+- **Ref:** [D-019] 3-fold cross-subject 평가, [D-022] 기존 자체수집 목표, `collect/labels.py`, `model/pretrained/checkpoints/best.pt`
+- **Status:** confirmed
+
+### [D-024] Fine-tuning HPO 적용 방식 확정
+- **Date:** 2026-05-21
+- **Decided by:** user / claude-ai / codex
+- **Content:**
+  - fine-tuning 하이퍼파라미터 자동 탐색은 **Optuna TPESampler + PatientPruner 기반 Bayesian Optimization**으로 확정한다.
+  - 적용 타이밍은 manual baseline 1회 실행 후 분기한다. 결과가 목표에 근접하면 manual ablation으로 마무리하고, 목표에 미달하면 Optuna 20~30 trials를 즉시 실행한다. 다만 일정 지연을 막기 위해 지금 단계에서 `run_training()` 결과 반환, HPO mode 플래그, objective wrapper 최소 구조는 준비한다.
+  - 1차 search space: `source_ratio={0.50,0.55,0.60,0.65}`, `hard_weight=1.10~1.50`, `attention_lr={1e-4,3e-4,5e-4}`, `head_lr={5e-4,1e-3}`.
+  - 2차 search space: `fall_weight={1.0,1.2,1.5}`, `backbone_lr={3e-5,1e-4}`. `threshold`는 HPO 탐색 대상이 아니며 각 trial 내부 validation sweep으로 선택한다.
+  - Objective는 accuracy를 제외하고 `fall_f1`, recall 부족 penalty, FAR 초과 penalty를 사용한다. 공식 목표(`recall >= 0.85`, `FAR <= 0.15`)를 만족하는 후보를 살리고, stretch 목표(`recall >= 0.90`, `FAR <= 0.10`)에는 bonus를 부여한다.
+  - Pruning은 warmup 5 epoch 동안 금지하고 epoch 10 이후부터 PatientPruner를 적용한다. HPO 과정에서 sealed test fold는 절대 사용하지 않고, best trial 확정 후 딱 1회만 sealed test를 실행한다.
+- **Status:** confirmed
+
+### [D-025] 패킷 동기화 및 100Hz 선형보간 품질 관리 보완
+- **Date:** 2026-05-21
+- **Decided by:** user / codex review
+- **Content:**
+  - 현재 Rx1/Rx2 페어링은 `seq_num`이 아니라 `timestamp_us` 기반 nearest match로 수행되며, 한쪽 패킷 손실 시 seq가 어긋날 수 있으므로 이 방향은 유지한다.
+  - 현재 허용 오차 `PAIR_TOLERANCE_US=50ms`는 70Hz 기준 패킷 간격(약 14ms)에 비해 넓다. 실제 수집 후 `abs(rx1_ts - rx2_ts)` 분포(p95/p99)를 확인하고, 안정적이면 20ms 안팎으로 축소하는 것을 검토한다.
+  - 현재 CSV row의 `timestamp_us`는 Rx1 timestamp만 저장한다. 학습/추론 일관성은 유지되지만 Rx2 timestamp와 pair delay를 사후 검증하기 어렵기 때문에 후속으로 `pair_dt_us`, 가능하면 `timestamp_rx1_us`/`timestamp_rx2_us`를 수집 로그 또는 CSV metadata에 남긴다.
+  - 오프라인 전처리의 100Hz 선형보간은 timestamp 정렬, 중복 timestamp 평균, 외삽 금지로 구현되어 있어 기본 방향은 타당하다. 단, `max_gap_ms`는 현재 hard reject가 아니라 metadata 집계용이므로 큰 timestamp gap이 있는 window를 warning/skip 처리하는 정책을 추가한다.
+  - 실시간 추론 버퍼도 같은 100Hz 선형보간 가정을 사용하지만 `max_gap_ms` 설정을 실제로 사용하지 않는다. offline preprocessing과 realtime inference의 gap 처리 정책을 맞추는 것을 후속 구현 대상으로 둔다.
+- **Status:** confirmed
+
+### [D-026] 공유기/채널 고정 효과와 WiFi 간섭 한계 정리
+- **Date:** 2026-05-21
+- **Decided by:** user / codex
+- **Content:**
+  - 공유기 사용은 핫스팟 대비 채널 고정, 연결 안정성, 수집 조건 재현성 개선에는 도움이 된다.
+  - 다만 공유기를 사용해도 해당 채널을 독점하는 것은 아니므로 주변 AP의 동일 채널/인접 채널 사용, 신호 세기, 다중경로 변화로 인한 WiFi 간섭은 남는다. 이는 CSI 기반 시스템의 구조적 한계로 취급한다.
+  - 패킷 손실률은 1~2%면 거의 문제 없고, 10~15%는 100Hz 보간과 window 기반 모델로 사용 가능할 가능성이 있으나 완전한 상태는 아니다. 평균 손실률보다 낙상 순간 근처의 연속 gap, timestamp gap, pair delay 분포가 더 중요하다.
+  - 라우터 확보 시 리샘플 필요성 자체를 폐기하기보다, 채널 고정 후 pair rate, loss rate, max gap, pair delay 분포가 얼마나 개선되는지 재평가한다.
+- **Status:** confirmed
+
 ---
 
 ## Implementation Status
@@ -259,7 +315,7 @@ _Last updated: 2026-05-19 (Pi4 프로토콜/실시간 추론 버퍼 검증 + SMS
 | preprocessing/resample.py (D-018 SafeSignal 100Hz 리샘플) | done | main | 2026-05-13 |
 | preprocessing/loader.py SafeSignal 경로 (load_safesignal_csv 등) | done | main | 2026-05-13 |
 | preprocessing/pipeline.py SafeSignal 경로 (preprocess_safesignal_file*) | done | main | 2026-05-13 |
-| fine-tuning | pending | - | - |
+| fine-tuning | in progress (combined training train.py skeleton pushed; HPO/gap-quality hooks pending) | codex/finetune-train-skeleton | 2026-05-21 |
 | Pi4 하드웨어 버튼 인터페이스 | pending | - | - |
 | E2E 통합 테스트 | pending | - | - |
 | inference/ 모듈 (InferenceWorker + FallPredictor + SlidingWindowBuffer) | done | main | 2026-05-11 |
@@ -271,6 +327,18 @@ _Last updated: 2026-05-19 (Pi4 프로토콜/실시간 추론 버퍼 검증 + SMS
 ---
 
 ## Review Notes
+
+### 2026-05-20 — combined training fine-tuning train.py 골격 구현 및 검토
+
+- 검토/구현 범위: `model/finetune/train.py` 신규 골격 작성 및 Claude Code 후속 수정 결과를 Codex가 재검토. 현재 파일은 `wifi-csi-fall-detection` working tree에서 untracked 상태이며 git commit/push는 수행하지 않음.
+- 데이터/학습 정책 반영: Alsaify + SafeSignal combined training, 7-class(`fall/walking/sit_stand/lying/standing/running/picking`), Alsaify 6-class `picking` label 5 → fine-tuning index 6 remap, SafeSignal-only `running` index 5, side-fall(`FALL_*_S`) filename 기반 학습 제외 로그.
+- 모델 정책 반영: pretrained 6-class head → 7-class head migration 구현(`new[0:5]=old[0:5]`, `new[5]` re-init, `new[6]=old[5]`), combined training 기준 full unfreeze + 5 epoch backbone warmup 구조 유지. D-023의 partial-freeze 기본안과의 정책 정렬은 후속 결정 필요.
+- Sampler 정책 반영: `WeightedRandomSampler`에 source ratio와 SafeSignal hard non-fall class weight 적용. 후속 수정으로 class weight가 source mass를 침범하지 않도록 source별 raw weight 합 정규화 적용 완료(`source_ratio=0.60`이면 SafeSignal weight 합 0.60, Alsaify 0.40 유지).
+- 증강 leakage 방지: SafeSignal 공식 cache는 raw-only 전제로 두고, `is_augmented=True`, non-empty `augment_type`, filename 증강 marker(`_AUG`, `AUGMENT`, `JITTER`, `SCALING`, `TIMEWARP`, `NOISE`)가 감지되면 즉시 에러. 증강은 split 이후 `TrainAugmentDataset`에서 train subset에만 적용하는 구조로 고정하되 실제 증강 구현은 TODO. SafeSignal 7,200은 원본 수집 세션 수가 아니라 원본 1,440세션 기준 train 증강 5배 적용 시 가능한 최대 학습 샘플 규모로 표기한다.
+- Validation/Test 구조: SafeSignal primary validation, Alsaify+SafeSignal auxiliary validation, SafeSignal sealed 3-fold cross-subject test 구조 반영. 현재 단일 fold runner이며 3-fold pooled threshold 및 mean pass/fail 집계 드라이버는 후속 작업.
+- Checkpoint/threshold 정책: `last.pt`, `best_val_loss.pt`, `best_operating.pt` 저장, threshold sweep 0.30~0.70(step 0.05), sealed test 전 `best_operating.pt` reload. checkpoint args 내 `Path`는 PyTorch 2.6+ `weights_only=True` reload 문제를 피하도록 string 직렬화.
+- 검증 결과(Claude Code 실행 보고 + Codex 확인): `python -m py_compile model/finetune/train.py` 통과. synthetic sampler mass test, Alsaify remap, head migration, raw-only/augmented cache guard, dummy dry-run 1 epoch CPU 검증 통과 보고. Codex도 py_compile 및 핵심 구현 라인 재확인 완료.
+- 남은 TODO: SafeSignal CSV→raw window cache builder, Alsaify pretrained 전처리 경로 기반 fine-tuning cache builder, `TrainAugmentDataset` 실제 증강 연결, 최종 eval/report 확장, 3-fold pooled global threshold selector 및 mean pass/fail 집계, full unfreeze vs partial freeze 및 GRU warmup 포함 여부 정책 확정.
 
 ### 2026-05-19 — Pi4 프로토콜/실시간 추론 버퍼 검증 및 SMS 실기 확인
 
@@ -576,6 +644,13 @@ _Last updated: 2026-05-19 (Pi4 프로토콜/실시간 추론 버퍼 검증 + SMS
 
 ---
 
+### 2026-05-21 — HPO 및 패킷 동기화/보간 보완 검토
+
+- HPO 방향은 Optuna TPE + PatientPruner로 확정. `run_training()` 반환 구조, HPO mode, objective wrapper는 다음 fine-tuning 구현 단계에서 추가 필요. HPO는 sealed test를 사용하지 않고 SafeSignal primary validation metrics만 사용한다.
+- 패킷 동기화는 timestamp 기반 nearest-match를 유지하되, pair quality 검증을 위해 `pair_dt_us` 기록과 pair delay 분포(p95/p99) 산출이 필요하다.
+- 오프라인/실시간 100Hz 선형보간 정책은 방향이 일관되지만, realtime buffer에서 `max_gap_ms`가 실제 skip/warn 조건으로 쓰이지 않는 차이가 있다. 큰 timestamp gap은 보간으로 메우기보다 품질 경고 또는 window 제외 후보로 다룬다.
+- 공유기 사용은 핫스팟 대비 채널 고정과 재현성 개선에는 유효하지만 주변 AP와의 채널 공유/간섭은 제거하지 못한다. 수집 품질 평가는 평균 loss rate뿐 아니라 연속 gap, timestamp gap, pair delay를 함께 본다.
+
 ## Pending Items
 
 - [ ] 일반 행동 추론 결과 저장 방식 결정 및 구현 (JSONL/CSV/SQLite 중 선택). Pi4 실시간 전송은 낙상 알림 전용으로 유지하고, non-fall 결과는 서버에 축적하여 1주일 단위 생활 패턴 감소 분석에 활용.
@@ -585,7 +660,7 @@ _Last updated: 2026-05-19 (Pi4 프로토콜/실시간 추론 버퍼 검증 + SMS
 - [ ] PS 비활성화 효과 검증 종료 후 RX1/RX2 디버그 카운터·stats_task 정리 (`csi_rx1_main.c`, `csi_rx2_main.c`) — 라우터 환경 재평가 마친 뒤 진행 권장 (D-018 후속)
 - [x] self-collected 100Hz 리샘플 구현 (2026-05-13 완료. `model/preprocessing/resample.py` 신규 + loader/pipeline 확장. scipy `interp1d` 대신 `np.interp` 사용 — 결과 동일, 의존성 -1. ResampleResult metadata에 gap_count/max_gap_us/original_rate_hz 노출. Alsaify 경로 무변경.)
 - [ ] portable router 확보 시 70Hz 천장 해소 가능성 재평가, 리샘플 필요성 재판단 ([D-017]/[D-018] 후속)
-- [ ] fine-tuning 진입 전 `train.py`/캐시 빌더에 SafeSignal CSV 전용 경로 연결 (`preprocess_safesignal_file*`)
+- [ ] fine-tuning 후속 구현: SafeSignal CSV→raw window cache builder, Alsaify fine-tuning cache builder, TrainAugmentDataset 실제 증강 연결, 최종 eval/report 확장, 3-fold pooled global threshold selector 및 mean pass/fail 집계, full unfreeze vs partial freeze 정책 확정 (2026-05-20: combined training `model/finetune/train.py` 골격/안전장치 구현 및 검증 완료, local untracked)
 - [ ] SDP z-score A안(Global) 학습/평가 후, 동일 split에서 B안(Per-lag) 재학습 ablation 수행 및 최종 정규화 방식 결정 ([D-020] 후속. A안 구현 자체는 main `14bfb12`로 2026-05-17 완료)
 - [x] ACF lag=1..20 기준으로 Alsaify 사전학습 캐시 재생성 및 `best.pt` 재학습 (`_lag1_20` 캐시 사용) (2026-05-18 완료. `dataset_cache_e12_w300_s300_lag1_20_tail_ps.npz` 기반 30epoch 재학습 — best=epoch7: fall_recall=0.922 / fall_f1=0.902 / FAR=0.029 / acc=0.791, meets_all_targets=true. lag0 포함 버전(recall=0.919/f1=0.913/FAR=0.022/acc=0.810) 대비 recall +0.003, f1 -0.011, FAR +0.007, acc -0.019 — 거의 동등. D-011 stretch(recall≥0.90) 충족)
 - [ ] Google Drive 자동 업로드용 rclone 설치/설정 절차 팀원 PC에서 확정 (`SAFESIGNAL_DRIVE_UPLOAD`, `SAFESIGNAL_DRIVE_REMOTE`)
@@ -603,6 +678,10 @@ _Last updated: 2026-05-19 (Pi4 프로토콜/실시간 추론 버퍼 검증 + SMS
 - [x] server/dongseok + feature/pretrained-model → main 브랜치 통합
 - [x] inference/ 모듈 구현 (InferenceWorker, 슬라이딩 윈도우 버퍼, 결과 큐)
 
+- [ ] HPO 후속 구현: `run_training()` 결과 객체 반환, `--hpo` 모드, Optuna objective wrapper, PatientPruner 연결, trial별 checkpoint 최소화, best trial 1회 sealed test 실행 구조 추가 ([D-024] 후속)
+- [ ] 패킷 동기화/보간 품질 보완: `pair_dt_us` 또는 Rx1/Rx2 timestamp metadata 기록, pair delay p95/p99 리포트, `PAIR_TOLERANCE_US` 실측 기반 재조정, offline/realtime `max_gap_ms` skip/warn 정책 정렬 ([D-025] 후속)
+- [ ] 공유기/채널 고정 환경에서 pair rate, loss rate, max timestamp gap, pair delay 분포 재측정 후 핫스팟 대비 개선폭과 리샘플 필요성 재평가 ([D-026] 후속)
+
 ---
 
 ## Milestones
@@ -614,6 +693,7 @@ _Last updated: 2026-05-19 (Pi4 프로토콜/실시간 추론 버퍼 검증 + SMS
 | W5 | 2026-05-28 | E2E 통합, 2환경 검증 |
 | W6 | 2026-06-04 | Demo |
 | W7 | 2026-06-11 | 최종 발표 |
+
 
 
 
