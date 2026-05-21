@@ -1,6 +1,6 @@
 ﻿# SafeSignal Project State
 
-_Last updated: 2026-05-21 (STATE 충돌 문구 정정) | Updated by: codex_
+_Last updated: 2026-05-21 (fine-tuning 수집 규모/HPO 기준 정리) | Updated by: codex_
 
 ---
 
@@ -301,6 +301,30 @@ _Last updated: 2026-05-21 (STATE 충돌 문구 정정) | Updated by: codex_
   - warmup은 5 epoch 고정으로 둔다. warmup 동안 backbone lr은 `1e-5`, 이후 `1e-4`로 증가한다. attention lr은 `3e-4`, head lr은 `1e-3`을 기본값으로 둔다.
   - warmup 5 epoch 동안 early stopping/pruning은 비활성화한다. early stopping 감시는 epoch 10부터 시작한다.
   - partial freeze는 기본 정책이 아니라 ablation 또는 fallback 후보로만 남긴다.
+- **Status:** confirmed
+
+### [D-028] Fine-tuning 최종 수집 규모 기준 정리
+- **Date:** 2026-05-21
+- **Decided by:** user / codex
+- **Content:**
+  - fine-tuning 기준 SafeSignal 원본 수집 규모는 **1,440세션**으로 둔다.
+  - 계산 기준: env-subject 조합 1개당 240세션, 총 6개 env-subject 조합 = 1,440세션.
+  - 환경 구성은 4개 환경이며, 이 중 3개 개인 환경은 각 1명씩 수집하고, 나머지 1개 공용 환경(E4)은 3명이 모두 수집한다. 따라서 조합은 `E1-S01`, `E2-S02`, `E3-S03`, `E4-S01`, `E4-S02`, `E4-S03`이다.
+  - 240세션 구성은 side fall 제외 기준이며, fall 60세션 + non-fall 180세션이다.
+  - 증강 5배 기준 7,200은 원본 세션 수가 아니라 train split에만 증강을 적용했을 때의 최대 학습 샘플 규모로 표현한다.
+  - 단, 수집 일정 또는 환경 문제로 일부 개인 환경 수집이 제외될 수 있으므로 1,440세션은 최종 목표 기준이며 실제 학습 규모는 일정에 따라 변경될 수 있다.
+  - D-022의 1,620세션/270세션 구조는 side fall을 포함한 이전 전체 수집 기준으로 남기되, fine-tuning 기본 학습/검증/보고 기준은 본 결정(D-028)의 1,440세션/240세션 구조를 따른다.
+- **Status:** confirmed
+
+### [D-029] HPO 목표 기준 정렬
+- **Date:** 2026-05-21
+- **Decided by:** user / codex
+- **Content:**
+  - HPO objective와 trial selection은 fine-tuning 최종 기준을 따른다.
+  - 공식 목표는 `fall_recall >= 0.85`, `FAR <= 0.15`, `fall_f1 >= 0.85`이며, stretch 목표는 `fall_recall >= 0.90`, `FAR <= 0.10`으로 둔다.
+  - Optuna trial 내부에서는 threshold를 탐색 파라미터로 두지 않고 validation threshold sweep 결과 metrics를 objective에 넘긴다.
+  - sealed test는 HPO 과정에서 사용하지 않으며, best trial 확정 후 최종 1회만 적용한다.
+  - 코드 구현 시 이전 skeleton의 operating/stretch 명명 또는 더 엄격한 임계값이 남아 있으면 본 결정과 D-024 기준으로 정렬한다.
 - **Status:** confirmed
 
 ---
@@ -675,6 +699,12 @@ _Last updated: 2026-05-21 (STATE 충돌 문구 정정) | Updated by: codex_
 - 2026-05-20 fine-tuning Review Notes의 `train.py untracked` 표현을 `codex/finetune-train-skeleton` 브랜치 commit/push 완료로 정정했다.
 - 같은 Review Notes의 `partial-freeze 정책 정렬 필요` 문구를 D-027 기준 정렬 완료로 정정했다.
 
+### 2026-05-21 — fine-tuning 수집 규모와 HPO 기준 정리
+
+- fine-tuning 최종 원본 수집 규모는 env-subject 조합 6개 × 240세션 = 1,440세션으로 확정했다. 4개 환경 중 E4에서 3명이 모두 수집하므로 총 조합은 `E1-S01`, `E2-S02`, `E3-S03`, `E4-S01`, `E4-S02`, `E4-S03`이다.
+- 1,440세션은 side fall 제외 기준이며, 일정/환경 문제로 실제 수집 규모는 변동될 수 있다. D-022의 1,620세션은 side fall 포함 과거 전체 수집 기준으로 구분한다.
+- HPO는 fine-tuning 최종 기준을 따른다. 공식 목표는 recall 0.85/FAR 0.15/F1 0.85, stretch는 recall 0.90/FAR 0.10이며, sealed test는 HPO에 사용하지 않는다.
+
 ## Pending Items
 
 - [ ] 일반 행동 추론 결과 저장 방식 결정 및 구현 (JSONL/CSV/SQLite 중 선택). Pi4 실시간 전송은 낙상 알림 전용으로 유지하고, non-fall 결과는 서버에 축적하여 1주일 단위 생활 패턴 감소 분석에 활용.
@@ -693,7 +723,7 @@ _Last updated: 2026-05-21 (STATE 충돌 문구 정정) | Updated by: codex_
 - [x] Alsaify 전체 사전학습 실행 (2026-05-14 팀원 결과 수령·로컬 적용 — best fall_recall=0.919 / F1=0.913 / FAR=0.022, meets_all_targets=true)
 - [x] `preprocess_directory()`에 `tail_window` 옵션 추가 (윈도우-only 디버깅/분석 API 일관성 보완)
 - [ ] Sliding window size 실험적 결정 (데이터 수집 후)
-- [x] 자체 수집 계획 최종 구조 확정 (2026-05-18 완료. [D-021] 환경·피험자 코드 확정, [D-022] 서버 기준 유지 — E1~E4 총 1,620세션 목표 확정)
+- [x] fine-tuning 자체수집 최종 기준 확정 (2026-05-21 완료. [D-028] 기준 — 4개 환경, 6개 env-subject 조합, 조합당 240세션, 총 1,440세션 목표. 일정/환경 문제로 변동 가능)
 - [ ] 보호자 알림 상세 시나리오 확정 (동석 담당, SOLAPI vs KakaoTalk 포함)
 - [ ] ESP32 3대 배터리 런타임 정량화
 - [ ] GitHub 브랜치 전략 확정
@@ -702,7 +732,7 @@ _Last updated: 2026-05-21 (STATE 충돌 문구 정정) | Updated by: codex_
 - [x] server/dongseok + feature/pretrained-model → main 브랜치 통합
 - [x] inference/ 모듈 구현 (InferenceWorker, 슬라이딩 윈도우 버퍼, 결과 큐)
 
-- [ ] HPO 후속 구현: `run_training()` 결과 객체 반환, `--hpo` 모드, Optuna objective wrapper, PatientPruner 연결, trial별 checkpoint 최소화, best trial 1회 sealed test 실행 구조 추가 ([D-024] 후속)
+- [ ] HPO 후속 구현: `run_training()` 결과 객체 반환, `--hpo` 모드, Optuna objective wrapper, PatientPruner 연결, trial별 checkpoint 최소화, best trial 1회 sealed test 실행 구조 추가 ([D-024]/[D-029] 후속, fine-tuning 최종 기준 사용)
 - [ ] 패킷 동기화/보간 품질 보완: `pair_dt_us` 또는 Rx1/Rx2 timestamp metadata 기록, pair delay p95/p99 리포트, `PAIR_TOLERANCE_US` 실측 기반 재조정, offline/realtime `max_gap_ms` skip/warn 정책 정렬 ([D-025] 후속)
 - [ ] 공유기/채널 고정 환경에서 pair rate, loss rate, max timestamp gap, pair delay 분포 재측정 후 핫스팟 대비 개선폭과 리샘플 필요성 재평가 ([D-026] 후속)
 
@@ -717,6 +747,7 @@ _Last updated: 2026-05-21 (STATE 충돌 문구 정정) | Updated by: codex_
 | W5 | 2026-05-28 | E2E 통합, 2환경 검증 |
 | W6 | 2026-06-04 | Demo |
 | W7 | 2026-06-11 | 최종 발표 |
+
 
 
 
