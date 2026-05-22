@@ -1,6 +1,6 @@
 ﻿# SafeSignal Project State
 
-_Last updated: 2026-05-21 (fine-tuning 수집 규모/HPO 기준 정리) | Updated by: codex_
+_Last updated: 2026-05-22 (collect 240세션/side fall 제외 코드 정렬) | Updated by: claude-code_
 
 ---
 
@@ -346,7 +346,8 @@ _Last updated: 2026-05-21 (fine-tuning 수집 규모/HPO 기준 정리) | Update
 | Alsaify 전체 사전학습 (E1+E2, ACF lag=1..20) | done (lag1..20 재학습) | main (`model/pretrained/checkpoints/` gitignored) | 2026-05-18 |
 | UDP 수신 서버 | pending | - | - |
 | WebSocket 서버-Pi4 통신 | pending | - | - |
-| 자체 데이터 수집 파이프라인 | done | feature/pretrained-model | 2026-05-11 |
+| 자체 데이터 수집 파이프라인 (collect/, D-023/D-028 240세션·side fall 제외 정렬) | done | codex/finetune-train-skeleton `4adfbff` | 2026-05-22 |
+| server 수집 경로 (collect_manager.py invalid activity_code 가드) | done | codex/finetune-train-skeleton `4adfbff` | 2026-05-22 |
 | preprocessing/resample.py (D-018 SafeSignal 100Hz 리샘플) | done | main | 2026-05-13 |
 | preprocessing/loader.py SafeSignal 경로 (load_safesignal_csv 등) | done | main | 2026-05-13 |
 | preprocessing/pipeline.py SafeSignal 경로 (preprocess_safesignal_file*) | done | main | 2026-05-13 |
@@ -362,6 +363,14 @@ _Last updated: 2026-05-21 (fine-tuning 수집 규모/HPO 기준 정리) | Update
 ---
 
 ## Review Notes
+
+### 2026-05-22 — collect 자체수집 기준 240세션/side fall 제외 코드 정렬 및 전수 리뷰
+
+- 범위: D-023/D-028(side fall 3종 제외, env-subject 조합당 240세션) 결정을 collect/server/문서 코드에 반영하고 전체 영향 리뷰. 코드 커밋 `4adfbff` (codex/finetune-train-skeleton, 7 files).
+- 변경: `collect/labels.py`(270→240, 낙상 9종→6종, `FALL_SIT_S/STD_S/WALK_S` 제거), `collect/_selfcheck.py`(240·6종·side fall 미포함 검증), `collect/collect_main.py`(docstring), `server/collect_manager.py`(`start_session`에 `activity_code not in ACTIVITY_INFO` 방어 가드 추가), `debug/data_collect/check_csv_quality.py`(MIN_ROWS 죽은 `FALL_*_S` 키 제거), `model/CLAUDE.md`·`data/README.txt`(240세션 설명 일치화).
+- 안전장치 유지: `model/finetune/train.py`의 `SIDE_FALL_MARKERS`는 기존 side fall CSV를 fine-tuning train/val/test에서 제외하는 안전장치이므로 미수정. `keep` 마스크가 X/y/subjects/envs/filenames 전부에 적용됨을 재확인.
+- 리뷰 결과: 기능 버그 없음. collect CLI(`ACTIVITY_ORDER` 동적 순회)·서버 라우트(`/collect/labels`,`/collect/counts` 동적)·대시보드 UI(`renderActivityTable`가 `/collect/labels` 응답 기반 렌더, 270/9종/side fall 하드코딩 없음) 모두 라벨 단일 소스를 따름. 제거된 `FALL_*_S` 요청은 서버 가드가 `{ok:False}`로 차단(KeyError 없음). 저장소 전역에 잔존 270/9종 stale 참조 없음(주석·train.py 안전장치만).
+- 검증: `python -m collect._selfcheck` → ALL_OK(240 sessions, side fall excluded). `total_target_sessions()==240`, fall 6종, 비낙상 6종 target=30 확인. `CollectManager().start_session('FALL_SIT_S',...)` → `{ok:False, error:'알 수 없는 activity_code'}`, counts 키 12개. `check_csv_quality.py` import OK(MIN_ROWS 12키, `_S` 없음). `app.py` AST 파싱 OK(flask 미설치로 런타임 라우트 구동은 미수행).
 
 ### 2026-05-20 — combined training fine-tuning train.py 골격 구현 및 검토
 
