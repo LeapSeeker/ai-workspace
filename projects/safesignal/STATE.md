@@ -1,6 +1,6 @@
 ﻿# SafeSignal Project State
 
-_Last updated: 2026-05-22 (pair_dt/수집 품질 기록·리포트 구현, 실시간 카운터 정합) | Updated by: claude-code_
+_Last updated: 2026-05-22 (대시보드 수집 품질 박스 항목별 색상 + 종합 판정 배지 추가) | Updated by: claude-code_
 
 ---
 
@@ -349,6 +349,7 @@ _Last updated: 2026-05-22 (pair_dt/수집 품질 기록·리포트 구현, 실�
 | 자체 데이터 수집 파이프라인 (collect/, D-023/D-028 240세션·side fall 제외 정렬) | done | codex/finetune-train-skeleton `4adfbff` | 2026-05-22 |
 | server 수집 경로 (collect_manager.py invalid activity_code 가드) | done | codex/finetune-train-skeleton `4adfbff` | 2026-05-22 |
 | 수집 pair_dt/품질 기록·리포트 (CSV 110컬럼, collect/quality.py, CLI/서버UI/check_csv_quality, on_paired 카운터 정합) | done (report-only, PAIR_TOLERANCE_US 미변경) | codex/finetune-train-skeleton `48ff88e` | 2026-05-22 |
+| 대시보드 품질 박스 항목별 색상 + 종합 판정(저장/검토/폐기) 배지 (index.html) | done (report-only, 저장 차단 미연결) | codex/finetune-train-skeleton `5657f57` | 2026-05-22 |
 | preprocessing/resample.py (D-018 SafeSignal 100Hz 리샘플) | done | main | 2026-05-13 |
 | preprocessing/loader.py SafeSignal 경로 (load_safesignal_csv 등) | done | main | 2026-05-13 |
 | preprocessing/pipeline.py SafeSignal 경로 (preprocess_safesignal_file*) | done | main | 2026-05-13 |
@@ -359,11 +360,18 @@ _Last updated: 2026-05-22 (pair_dt/수집 품질 기록·리포트 구현, 실�
 | main 브랜치 통합 (server/dongseok + feature/pretrained-model) | done | main | 2026-05-11 |
 | tools/augment_inspector.py (증강 파라미터 검토용 시각화) | done | main | 2026-05-18 |
 | preprocessing/acf.py lag 정책 (lag0 제외, lag=1..20) | done | main `49f92be` | 2026-05-18 |
-| collect/drive_upload.py (rclone 기반 Google Drive 업로드) | in progress (local only, not pushed) | main working tree | 2026-05-18 |
+| collect/drive_upload.py (rclone 기반 Google Drive 자동 업로드) | done (운영 확인: `gdrive:SafeSignal_Dataset`, `E*/S*` 자동 분류) | main | 2026-05-22 |
 
 ---
 
 ## Review Notes
+
+### 2026-05-22 — 대시보드 수집 품질 박스 항목별 색상 + 종합 판정 배지 ([D-025] 후속, report-only)
+
+- 범위: `server/dashboard/templates/index.html` 단일 파일. 커밋 `5657f57` (codex/finetune-train-skeleton, +90/-7). report-only 유지 — 저장 차단/RECOLLECT 미연결, `PAIR_TOLERANCE_US` 등 수집 로직 무변경.
+- 항목별 색상: `qualColor(us, {warn,bad})` 헬퍼 추가(us→ms, warn/bad threshold별 `#e6edf3`/`#d29922`/`#ff4d4d`, null→`#8b949e`). pair_rate(85/95Hz), capture_ratio(0.90~1.10/0.95~1.05), pair_dt p50·p95·p99·max, ts_gap p95·max 각 항목 개별 색상.
+- 종합 판정 배지(`#qVerdict`): 손실+페어링 종합. 🔴 손실≥20%|p50>10ms|gap_p95>30ms → 폐기·재수집, 🟡 손실≥5%|p50>5ms|gap_p95>15ms → 검토 후 저장, 🟢 그 외 저장 권장. 판정 사유 함께 표시, 수집 로그에도 1줄 기록. 지표별 단일 버킷 분류 + loss/p50/gap null·NaN 방어.
+- 판정 기준 주의: 오프라인 `check_csv_quality.py`는 RECOLLECT를 손실률만으로 판정(pair_dt/gap report-only)하나, 대시보드 배지는 사용자 선택으로 손실+페어링 종합(엄격) 기준 채택. pair_dt/gap을 판정에 반영하는 점이 오프라인 도구와 다름. 기존 자체수집 55개(110컬럼)는 p50~7ms·gap_p95~20ms로 대부분 🟡(검토 후 저장)로 분류됨 — 🔴/🟢 거의 없음. 변별력 부족 시 노랑 경계(p50 5→7, gap_p95 15→20) 상향 검토 여지.
 
 ### 2026-05-22 — pair_dt/수집 품질 기록·리포트 구현 + 실시간 카운터 정합 ([D-025] 후속)
 
@@ -738,7 +746,7 @@ _Last updated: 2026-05-22 (pair_dt/수집 품질 기록·리포트 구현, 실�
 - [ ] fine-tuning 후속 구현: SafeSignal CSV→raw window cache builder, Alsaify fine-tuning cache builder, TrainAugmentDataset 실제 증강 연결, 최종 eval/report 확장, 3-fold pooled global threshold selector 및 mean pass/fail 집계, full unfreeze + warmup 정책 반영 확인 (2026-05-20: combined training `model/finetune/train.py` 골격/안전장치 구현 및 검증 완료, local untracked)
 - [ ] SDP z-score A안(Global) 학습/평가 후, 동일 split에서 B안(Per-lag) 재학습 ablation 수행 및 최종 정규화 방식 결정 ([D-020] 후속. A안 구현 자체는 main `14bfb12`로 2026-05-17 완료)
 - [x] ACF lag=1..20 기준으로 Alsaify 사전학습 캐시 재생성 및 `best.pt` 재학습 (`_lag1_20` 캐시 사용) (2026-05-18 완료. `dataset_cache_e12_w300_s300_lag1_20_tail_ps.npz` 기반 30epoch 재학습 — best=epoch7: fall_recall=0.922 / fall_f1=0.902 / FAR=0.029 / acc=0.791, meets_all_targets=true. lag0 포함 버전(recall=0.919/f1=0.913/FAR=0.022/acc=0.810) 대비 recall +0.003, f1 -0.011, FAR +0.007, acc -0.019 — 거의 동등. D-011 stretch(recall≥0.90) 충족)
-- [ ] Google Drive 자동 업로드용 rclone 설치/설정 절차 팀원 PC에서 확정 (`SAFESIGNAL_DRIVE_UPLOAD`, `SAFESIGNAL_DRIVE_REMOTE`)
+- [x] Google Drive 자동 업로드용 rclone 설치/설정 절차 확인 (2026-05-22: 수집 노트북 Bash 기준 `SAFESIGNAL_RCLONE_BIN`, `SAFESIGNAL_DRIVE_UPLOAD=1`, `SAFESIGNAL_DRIVE_REMOTE=gdrive:SafeSignal_Dataset`로 Drive 업로드 확인. 팀원 PC는 rclone remote 이름/실행 경로만 별도 확인)
 - [ ] E2E 실시간 추론 단계에서 `server/inference/buffer.py`를 timestamp-aware 100Hz resampling buffer로 전환
 - [ ] `wifi_event_group` 미사용 잔재 변수 정리 (`csi_rx1_main.c:86`, RX2 동일)
 - [x] Alsaify 전체 사전학습 실행 (2026-05-14 팀원 결과 수령·로컬 적용 — best fall_recall=0.919 / F1=0.913 / FAR=0.022, meets_all_targets=true)
