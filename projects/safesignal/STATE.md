@@ -1,6 +1,6 @@
 ﻿# SafeSignal Project State
 
-_Last updated: 2026-05-22 (collect 240세션/side fall 제외 코드 정렬) | Updated by: claude-code_
+_Last updated: 2026-05-22 (pair_dt/수집 품질 기록·리포트 구현, 실시간 카운터 정합) | Updated by: claude-code_
 
 ---
 
@@ -348,6 +348,7 @@ _Last updated: 2026-05-22 (collect 240세션/side fall 제외 코드 정렬) | U
 | WebSocket 서버-Pi4 통신 | pending | - | - |
 | 자체 데이터 수집 파이프라인 (collect/, D-023/D-028 240세션·side fall 제외 정렬) | done | codex/finetune-train-skeleton `4adfbff` | 2026-05-22 |
 | server 수집 경로 (collect_manager.py invalid activity_code 가드) | done | codex/finetune-train-skeleton `4adfbff` | 2026-05-22 |
+| 수집 pair_dt/품질 기록·리포트 (CSV 110컬럼, collect/quality.py, CLI/서버UI/check_csv_quality, on_paired 카운터 정합) | done (report-only, PAIR_TOLERANCE_US 미변경) | codex/finetune-train-skeleton `48ff88e` | 2026-05-22 |
 | preprocessing/resample.py (D-018 SafeSignal 100Hz 리샘플) | done | main | 2026-05-13 |
 | preprocessing/loader.py SafeSignal 경로 (load_safesignal_csv 등) | done | main | 2026-05-13 |
 | preprocessing/pipeline.py SafeSignal 경로 (preprocess_safesignal_file*) | done | main | 2026-05-13 |
@@ -363,6 +364,17 @@ _Last updated: 2026-05-22 (collect 240세션/side fall 제외 코드 정렬) | U
 ---
 
 ## Review Notes
+
+### 2026-05-22 — pair_dt/수집 품질 기록·리포트 구현 + 실시간 카운터 정합 ([D-025] 후속)
+
+- 범위: D-025 후속 중 "pair delay 사후 검증 정보 기록 + report-only 리포트"를 구현. 코드 커밋 `48ff88e` (codex/finetune-train-skeleton, 10 files). Codex 검토 후속 정리 4건 포함.
+- CSV 스키마: `collect/recorder.py` CSV_COLUMNS 107→110, 맨 끝에 `timestamp_rx1_us`/`timestamp_rx2_us`/`pair_dt_us` append. `timestamp_us`는 호환성 위해 Rx1 timestamp 의미 그대로 유지. `pair_dt_us = abs(rx1.ts - rx2.ts)`. 서버/CLI 모두 `SessionRecorder.add_pair` 단일 경로 경유 → 양쪽 110컬럼 저장.
+- 품질 helper: `collect/quality.py` 신규. `summarize_session(buf)` → pair_count/duration/pair_rate/capture_ratio/loss + pair_dt p50·p95·p99·max + ts_gap p95·max. row 0/1, legacy 107컬럼(=pair_dt 없음) 안전(None). loss는 `SessionRecorder.calculate_loss_rate` 재사용으로 기준 일치.
+- 표시(report-only): CLI(`collect_main.py`)는 저장 질문 직전 출력. 서버(`collect_manager.py`)는 `collect_finished` payload에 품질 필드 추가, 대시보드(`index.html`)는 저장/폐기 버튼 위 품질 박스 + null-safe 렌더(`N/A`). `check_csv_quality.py`는 `EXPECTED_COLS` 컬럼수 검증을 필수 컬럼명 검증으로 전환(107/110 모두 OK) + pair_dt/gap 통계 출력. MIN_ROWS 주석 100Hz 정정.
+- 실시간 카운터 정합: `server/main.py::on_paired`에서 `collect_manager.is_recording`을 `is_collecting` 로컬로 1회만 읽어 수집/추론 분기 기준 고정, `add_pair`를 `update_pair`보다 먼저 호출하여 `collect_pair_count` emit 값이 현재 페어 수와 일치(기존 1개 지연 해소). 저장 CSV pair 수/`pair_update`/`collect_pair_count` 정합.
+- 문서: `loader.py`/`test_safesignal.py` docstring을 107/110 호환 설명으로 최신화(로직 무변경, 이름 기반 선택이라 추가 컬럼 무시).
+- 비범위 준수: `PAIR_TOLERANCE_US` 미변경, pair_dt/gap은 저장 차단/RECOLLECT 미연결, `SIDE_FALL_MARKERS` 미수정, 펌웨어 IP/포트 미변경, loader 동작 무변경.
+- 검증(`.codex-test-venv` python): `collect/_selfcheck.py` ALL_OK(110컬럼·pair delay·quality summary 테스트 포함). `py_compile` 10파일 OK. `test_safesignal.py` ALL_OK. 카운터 스모크 — `add_pair` 동기 증가로 emit 값 [1..5] 1개 지연 없음 + on_paired 정적 순서/단일 is_recording 확인. 107/110 CSV loader 양쪽 (n,104), `check_csv_quality` 혼재 폴더 둘 다 status OK(107=pair_dt N/A, 110=p50/95/99/max).
 
 ### 2026-05-22 — collect 자체수집 기준 240세션/side fall 제외 코드 정렬 및 전수 리뷰
 
@@ -742,7 +754,8 @@ _Last updated: 2026-05-22 (collect 240세션/side fall 제외 코드 정렬) | U
 - [x] inference/ 모듈 구현 (InferenceWorker, 슬라이딩 윈도우 버퍼, 결과 큐)
 
 - [ ] HPO 후속 구현: `run_training()` 결과 객체 반환, `--hpo` 모드, Optuna objective wrapper, PatientPruner 연결, trial별 checkpoint 최소화, best trial 1회 sealed test 실행 구조 추가 ([D-024]/[D-029] 후속, fine-tuning 최종 기준 사용)
-- [ ] 패킷 동기화/보간 품질 보완: `pair_dt_us` 또는 Rx1/Rx2 timestamp metadata 기록, pair delay p95/p99 리포트, `PAIR_TOLERANCE_US` 실측 기반 재조정, offline/realtime `max_gap_ms` skip/warn 정책 정렬 ([D-025] 후속)
+- [x] 패킷 동기화 품질 기록/리포트 (2026-05-22 완료, 코드 커밋 `48ff88e`): CSV 110컬럼 확장으로 `timestamp_rx1_us`/`timestamp_rx2_us`/`pair_dt_us` 기록(`timestamp_us`는 Rx1 의미 유지). `collect/quality.py` 공통 helper로 pair_dt p50/p95/p99/max + ts_gap p95/max 산출. CLI(저장 질문 직전)·서버 대시보드(저장/폐기 전 품질 박스)·`check_csv_quality.py`(필수 컬럼명 검증으로 107/110 호환 + pair_dt/gap 출력)에 report-only 표시. loader는 이름 기반 선택이라 107/110 모두 (n,104)로 무변경 동작.
+- [ ] 패킷 동기화 품질 후속 ([D-025] 잔여): ① `PAIR_TOLERANCE_US`는 아직 미변경 — 실측 pair_dt/gap 분포(p95/p99) 확보 후 재조정 판단. ② pair_dt/gap threshold·WARN/RECOLLECT 기준은 분포 확보 후 결정(현재 report-only, 저장 차단 미연결). ③ offline/realtime `max_gap_ms` skip/warn 정책 정렬은 후속.
 - [ ] 공유기/채널 고정 환경에서 pair rate, loss rate, max timestamp gap, pair delay 분포 재측정 후 핫스팟 대비 개선폭과 리샘플 필요성 재평가 ([D-026] 후속)
 
 ---
