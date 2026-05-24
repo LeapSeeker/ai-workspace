@@ -1,6 +1,6 @@
 ﻿# SafeSignal Project State
 
-_Last updated: 2026-05-22 (대시보드 수집 품질 박스 항목별 색상 + 종합 판정 배지 추가) | Updated by: claude-code_
+_Last updated: 2026-05-25 (정식 파이프라인 기준 SDP z-score 전 energy 분석 스크립트 추가) | Updated by: claude-code_
 
 ---
 
@@ -361,6 +361,7 @@ _Last updated: 2026-05-22 (대시보드 수집 품질 박스 항목별 색상 + 
 | tools/augment_inspector.py (증강 파라미터 검토용 시각화) | done | main | 2026-05-18 |
 | preprocessing/acf.py lag 정책 (lag0 제외, lag=1..20) | done | main `49f92be` | 2026-05-18 |
 | collect/drive_upload.py (rclone 기반 Google Drive 자동 업로드) | done (운영 확인: `gdrive:SafeSignal_Dataset`, `E*/S*` 자동 분류) | main | 2026-05-22 |
+| debug/preprocessing/analyze_sdp_energy.py (정식 pipeline 기준 z-score 전 SDP energy 분석) | done (분석 전용, 추론 코드 무변경) | codex/no-motion-baseline | 2026-05-25 |
 
 ---
 
@@ -765,6 +766,8 @@ _Last updated: 2026-05-22 (대시보드 수집 품질 박스 항목별 색상 + 
 - [x] 패킷 동기화 품질 기록/리포트 (2026-05-22 완료, 코드 커밋 `48ff88e`): CSV 110컬럼 확장으로 `timestamp_rx1_us`/`timestamp_rx2_us`/`pair_dt_us` 기록(`timestamp_us`는 Rx1 의미 유지). `collect/quality.py` 공통 helper로 pair_dt p50/p95/p99/max + ts_gap p95/max 산출. CLI(저장 질문 직전)·서버 대시보드(저장/폐기 전 품질 박스)·`check_csv_quality.py`(필수 컬럼명 검증으로 107/110 호환 + pair_dt/gap 출력)에 report-only 표시. loader는 이름 기반 선택이라 107/110 모두 (n,104)로 무변경 동작.
 - [ ] 패킷 동기화 품질 후속 ([D-025] 잔여): ① `PAIR_TOLERANCE_US`는 아직 미변경 — 실측 pair_dt/gap 분포(p95/p99) 확보 후 재조정 판단. ② pair_dt/gap threshold·WARN/RECOLLECT 기준은 분포 확보 후 결정(현재 report-only, 저장 차단 미연결). ③ offline/realtime `max_gap_ms` skip/warn 정책 정렬은 후속.
 - [ ] 공유기/채널 고정 환경에서 pair rate, loss rate, max timestamp gap, pair delay 분포 재측정 후 핫스팟 대비 개선폭과 리샘플 필요성 재평가 ([D-026] 후속)
+- [x] 정식 pipeline 기준 z-score 전 SDP energy 분석 스크립트 추가 (2026-05-25, 코드 커밋 별도. `debug/preprocessing/analyze_sdp_energy.py` — load_safesignal_csv→resample_to_100hz→sliding_windows→rpca_sparse→stacked_doppler_profile까지 정식 경로 재현, z-score 직전 energy(sdp_mean_abs/fro/std/max_abs/sparse_ratio/raw_std/raw_delta_mean) + pair_dt/gap metadata 산출, 활동별 p50/p95/p99/min/max + no_motion p95/p99 초과비율, CSV/JSON 저장. E2 NO_MOTION 2파일 빠른 실행 검증 완료. 탐색용(max_iter=30, 300frame 균등샘플링) 대비 정식 경로에서 sdp_mean_abs 절대값이 다르게 나옴(p50 ≈0.027 vs 탐색 0.019) — 절대 threshold는 fall p5 확보 후 재산정 필요)
+- [ ] 실시간 추론에 z-score 전 SDP energy metadata 노출 (FALSE_POSITIVE_NOTES §7.10 후속, no_motion gate 사전작업): `window_to_model_input()`(model/preprocessing/pipeline.py)에 z-score 전 SDP를 옵션 반환하도록 확장 → `FallPredictor.predict()`(server/inference/predictor.py)가 sdp energy를 result dict에 포함 → `worker._inference_process`(server/inference/worker.py) result 통과 → `server/main.py` gate 판정에서 사용. buffer(server/inference/buffer.py)에는 gap/pair_dt quality metadata 보존 추가. fall 데이터 energy p5 확인 전 hard skip 금지(D-025/노트 §8.5).
 
 ---
 
