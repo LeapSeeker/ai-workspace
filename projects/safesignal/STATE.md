@@ -735,6 +735,41 @@ _Last updated: 2026-05-25 (정식 파이프라인 기준 SDP z-score 전 energy 
 - 1,440세션은 side fall 제외 기준이며, 일정/환경 문제로 실제 수집 규모는 변동될 수 있다. D-022의 1,620세션은 side fall 포함 과거 전체 수집 기준으로 구분한다.
 - HPO는 fine-tuning 최종 기준을 따른다. 공식 목표는 recall 0.85/FAR 0.15/F1 0.85, stretch는 recall 0.90/FAR 0.10이며, sealed test는 HPO에 사용하지 않는다.
 
+### 2026-05-25 — no_motion baseline / fall energy 비교 / 수집 운영 정책 업데이트
+
+- 코드 커밋 현황(`wifi-csi-fall-detection`, `codex/no-motion-baseline`):
+  - `0bae9c4 [분석] no_motion calibration baseline 생성 추가`: `tools/safesignal_debug.py calibrate --env E?`로 환경별 no_motion baseline JSON 생성.
+  - `eebaab0 [분석] no_motion baseline 요약 검증 명령 추가`: `baseline-summary --env E? --strict`로 baseline schema/핵심 값 검증.
+  - `9a1a7e8 [분석] baseline 대비 SDP energy 비교 명령 추가`: `compare-energy`로 no_motion baseline p95/p99와 대상 activity/fall p1/p5 비교.
+  - `305abeb [수정] 수집 서버 추론 비활성화 옵션 추가`: `SAFESIGNAL_DISABLE_INFERENCE=1`이면 `InferenceWorker`를 생성/start하지 않음. Git Bash `train` alias 등록 완료.
+  - `6b9041e [수정] 낙상 수집 stage를 event 중심으로 조정`: fall 6종 stage를 4초 프로토콜로 변경.
+- E2 no_motion baseline 정식 결과(`data/calibration/E2_no_motion_baseline.json`, RPCA max_iter=200):
+  - source: 2 files / 596 windows, `rpca_max_iter=200`, strict 검증 통과.
+  - `sdp_mean_abs`: p50=0.02783, p95=0.04062, p99=0.04352, min=0.02387, max=0.04444.
+  - `sdp_std`: p50=0.03103, p95=0.06065, p99=0.06725.
+  - `sparse_ratio`: p50=0.01831, p95=0.01888, p99=0.02057.
+  - quality: original_rate_hz p50=96.36Hz, max_gap_ms p99=122.74ms, gap_count max=2, pair_dt_p99_us p50≈40.9ms.
+- E1 fall vs E2 no_motion 정식 비교(`compare-energy --env E2 --target-env E1 --target-class fall`, RPCA max_iter=200):
+  - 대상: 90 files / 299 windows.
+  - `sdp_mean_abs`: no_motion p99=0.04352, fall p5=0.02152, target_ratio_le_nm_p99=0.84615.
+  - `sdp_std`: no_motion p99=0.06725, fall p5=0.01839, target_ratio_le_nm_p99=0.85619.
+  - `sparse_ratio`: no_motion p99=0.02057, fall p5=0.01713, target_ratio_le_nm_p99=0.28428.
+  - 결론: z-score 전 SDP energy만으로 no_motion과 fall 전체 세션 window가 분리되지 않는다. Energy hard skip/gate는 금지. Energy는 metadata/log 또는 후속 보조 조건 후보로만 유지.
+- 수집 운영 정책 업데이트:
+  - 수집 서버는 Git Bash `train` alias로 실행한다. 동작: repo 이동 → `SAFESIGNAL_DISABLE_INFERENCE=1` → Drive 업로드 env 설정 → `rclone lsd gdrive:` 확인 → `python server/main.py`.
+  - 서버 로그에 `[Inference] disabled by SAFESIGNAL_DISABLE_INFERENCE=1`가 떠야 하며, 수집 중 `[InferenceWorker] input_queue full` 로그가 나오면 안 된다.
+  - 데이터 수집 품질 기준은 학습 데이터 관리용이다. 실시간 추론에서 pair_dt/ts_gap을 hard reject로 쓰지 않는다.
+  - no_motion/fall energy 비교 결과에 따라 오탐 해결의 우선순위는 energy threshold가 아니라 `no_motion class 학습 + fall window 정제 + 품질 metadata`로 이동.
+- fall 수집 stage 확정(2026-05-25):
+  - `FALL_SIT_F/B`: 앉은 상태 대기 1초 → 낙상 2초 → 낙상 후 정지 1초.
+  - `FALL_STD_F/B`: 선 상태 대기 1초 → 낙상 2초 → 낙상 후 정지 1초.
+  - `FALL_WALK_F/B`: 1~2걸음 걷기 1초 → 낙상 2초 → 낙상 후 정지 1초.
+  - fall 세션 수/target은 유지하고 duration만 5초에서 4초로 변경. 낙상 후 일어나는 동작은 포함하지 않는다.
+- 네트워크/장비 운영 메모:
+  - 휴대폰/인터넷 uplink 랜선은 공유기 WAN/Internet 포트에 연결한다. LAN 1~4 포트가 아니다.
+  - Windows Wi-Fi IPv4가 바뀌면 RX1/RX2는 `set_server <IPv4> 5005`, TX는 `set_target <IPv4> 5005`로 재설정한다.
+  - RX1/RX2 NTP 동기화는 모니터에서 확인 가능하나, 장기적으로는 별도 ESP32 status heartbeat 패킷을 추가해 대시보드에서 확인하는 것이 필요하다.
+
 ## Pending Items
 
 - [ ] 일반 행동 추론 결과 저장 방식 결정 및 구현 (JSONL/CSV/SQLite 중 선택). Pi4 실시간 전송은 낙상 알림 전용으로 유지하고, non-fall 결과는 서버에 축적하여 1주일 단위 생활 패턴 감소 분석에 활용.
@@ -780,6 +815,7 @@ _Last updated: 2026-05-25 (정식 파이프라인 기준 SDP z-score 전 energy 
 | W5 | 2026-05-28 | E2E 통합, 2환경 검증 |
 | W6 | 2026-06-04 | Demo |
 | W7 | 2026-06-11 | 최종 발표 |
+
 
 
 

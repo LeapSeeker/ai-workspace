@@ -334,3 +334,224 @@ cooldown: 이벤트 반복 억제
 2. fall 데이터 확보 후 fall p5 energy와 no_motion p95/p99 비교
 3. no_motion class 학습 후 confusion matrix에서 no_motion -> fall 오탐 확인
 ```
+
+---
+
+## SDP Pre-Zscore Energy Sample Comparison (2026-05-25)
+
+raw amplitude 지표만으로는 `NO_MOTION`과 `STAND/LIE/SIT_STD`가 충분히 분리되지 않아, 모델 입력 직전 구조에 가까운 SDP energy를 추가 비교했다.
+
+### 분석 조건
+
+```text
+window: 3초
+stride: 1초
+window crop: 300 frame 균등 샘플링
+RPCA max_iter: 30 (탐색용, 정식 pipeline 기본 200보다 낮음)
+SDP: RPCA sparse -> ACF lag 1..20 -> subcarrier mean
+energy metric: z-score 전 sdp_mean_abs, sdp_fro, sdp_std, sdp_max_abs
+```
+
+주의:
+
+- 이 분석은 탐색용 sample이다.
+- scipy가 없는 번들 Python 환경 때문에 정식 `resample_to_100hz` 경로 대신 raw timestamp window에서 300 frame 균등 샘플링을 사용했다.
+- RPCA 반복 수도 정식 기본값 200이 아니라 30이다.
+- 따라서 절대값 threshold를 바로 코드에 박으면 안 되고, 분리 가능성 판단용으로만 사용한다.
+
+### Sample 수
+
+```text
+NO_MOTION: n=15
+STAND: n=22
+LIE: n=24
+SIT_STD: n=19
+WALK: n=24
+RUN: n=24
+```
+
+### sdp_mean_abs 결과
+
+```text
+NO_MOTION
+p50=0.01893 p95=0.01915 p99=0.01922 min=0.01857 max=0.01923
+
+STAND
+p50=0.01899 p95=0.02327 p99=0.02353 min=0.01837 max=0.02358
+
+LIE
+p50=0.02337 p95=0.02559 p99=0.02624 min=0.02000 max=0.02642
+
+SIT_STD
+p50=0.02022 p95=0.02219 p99=0.02253 min=0.01954 max=0.02262
+
+WALK
+p50=0.02391 p95=0.02582 p99=0.02599 min=0.02197 max=0.02603
+
+RUN
+p50=0.02310 p95=0.02472 p99=0.02513 min=0.02142 max=0.02524
+```
+
+### no_motion p95/p99 초과 비율
+
+`NO_MOTION sdp_mean_abs` 기준:
+
+```text
+p95=0.01915
+p99=0.01922
+```
+
+각 활동에서 이 기준을 초과한 sample 비율:
+
+```text
+NO_MOTION: >p95=0.067 >p99=0.067
+STAND:     >p95=0.455 >p99=0.364
+LIE:       >p95=1.000 >p99=1.000
+SIT_STD:   >p95=1.000 >p99=1.000
+WALK:      >p95=1.000 >p99=1.000
+RUN:       >p95=1.000 >p99=1.000
+```
+
+### 기타 지표 요약
+
+```text
+NO_MOTION sdp_std p50=0.01359 p95=0.01414 p99=0.01438
+STAND     sdp_std p50=0.01478 p95=0.02271 p99=0.02343
+LIE       sdp_std p50=0.02225 p95=0.02538 p99=0.02615
+SIT_STD   sdp_std p50=0.01689 p95=0.01983 p99=0.02134
+WALK      sdp_std p50=0.02296 p95=0.02608 p99=0.02664
+RUN       sdp_std p50=0.02217 p95=0.02716 p99=0.02740
+```
+
+```text
+NO_MOTION sparse_ratio p50=0.02124 p95=0.02155 p99=0.02162
+STAND     sparse_ratio p50=0.02215 p95=0.02331 p99=0.02377
+LIE       sparse_ratio p50=0.02401 p95=0.02541 p99=0.02649
+SIT_STD   sparse_ratio p50=0.02176 p95=0.02272 p99=0.02324
+WALK      sparse_ratio p50=0.02275 p95=0.02374 p99=0.02447
+RUN       sparse_ratio p50=0.02371 p95=0.02618 p99=0.02849
+```
+
+### 해석
+
+1. raw frame_delta보다 SDP pre-zscore energy가 no_motion과 동작을 더 잘 분리한다.
+2. `LIE`, `SIT_STD`, `WALK`, `RUN` sample은 전부 no_motion p99를 넘었다.
+3. `STAND`는 no_motion과 일부 겹친다. 이는 정적 자세와 no_motion이 CSI 관점에서 가까운 입력일 수 있음을 의미한다.
+4. 따라서 energy gate는 "fall/non-fall 활동 검출기"가 아니라 "명백한 no_motion/static 저에너지 window 억제" 용도로 써야 한다.
+5. z-score 전에 이 energy를 보존해야 한다. z-score 이후에는 no_motion의 작은 패턴도 표준화되어 모델에 의미 있는 패턴처럼 들어갈 수 있다.
+
+### 임시 후보
+
+탐색용 후보:
+
+```text
+sdp_energy_low 후보:
+  sdp_mean_abs <= no_motion p95~p99 부근
+  예: 0.0192 근처
+```
+
+다만 이 값은 정식 pipeline으로 재계산 후 확정해야 한다.
+
+실시간 추론 정책 후보:
+
+```text
+if sdp_mean_abs <= calibrated_no_motion_p99:
+    no_motion_energy_flag = True
+    fall alert suppression 후보
+else:
+    정상 추론 진행
+```
+
+주의:
+
+- 실제 낙상 데이터의 sdp_mean_abs p5가 no_motion p99보다 충분히 높은지 확인하기 전까지 hard skip 금지.
+- 처음에는 `skip`보다 `quality metadata + fall suppression 조건`으로 적용하는 것이 안전하다.
+- no_motion class 학습 후에는 모델의 no_motion probability와 함께 판단하는 것이 더 안정적이다.
+
+### 다음 필요 작업
+
+```text
+1. scipy/numpy/pandas가 있는 정식 개발 환경에서 preprocess_safesignal_file_full 경로로 재계산
+2. RPCA max_iter=200 기준 energy 분포 확인
+3. fall 데이터 확보 후 fall p5와 no_motion p99 비교
+4. sdp_mean_abs / sdp_std / sparse_ratio 중 가장 안정적인 gate 지표 선택
+5. 실시간 predictor에서 z-score 전 SDP energy를 metadata로 노출하는 코드 설계
+```
+
+---
+
+## 2026-05-25 정식 RPCA 200 Baseline 결과
+
+### 실행 명령
+
+```bash
+python tools/safesignal_debug.py calibrate --env E2 --workers 1 --rpca-max-iter 200 --progress-every 10
+python tools/safesignal_debug.py baseline-summary --env E2 --strict
+```
+
+### 검증 결과
+
+```text
+file: data/calibration/E2_no_motion_baseline.json
+environment: E2
+activity: NO_MOTION
+files/windows: 2 files / 596 windows
+rpca_max_iter: 200
+warnings: none
+```
+
+### 핵심 metric
+
+```text
+sdp_mean_abs   p50=0.02783 p95=0.04062 p99=0.04352 min=0.02387 max=0.04444
+sdp_std        p50=0.03103 p95=0.06065 p99=0.06725 min=0.02207 max=0.06930
+sparse_ratio   p50=0.01831 p95=0.01888 p99=0.02057 min=0.01513 max=0.02147
+raw_delta_mean p50=0.50943 p95=0.54972 p99=0.56612 min=0.35535 max=0.58622
+```
+
+### 품질 metadata
+
+```text
+original_rate_hz p50=96.35691 p95=96.74538 p99=96.77991 max=96.78855
+max_gap_ms       p50=119.22900 p95=122.45730 p99=122.74426 max=122.81600
+gap_count        p50=1.50000 p95=1.95000 p99=1.99000 max=2.00000
+pair_dt_p99_us   p50=40904.53000 p95=41494.86700 p99=41547.34140 max=41560.46000
+```
+
+### E1 fall 비교 결과
+
+```bash
+python tools/safesignal_debug.py compare-energy --env E2 --target-env E1 --target-class fall --workers 1 --rpca-max-iter 200 --progress-every 10
+```
+
+```text
+target: 90 files / 299 windows
+
+sdp_mean_abs:
+  no_motion p99=0.04352
+  fall p5=0.02152
+  target_ratio_le_nm_p99=0.84615
+
+sdp_std:
+  no_motion p99=0.06725
+  fall p5=0.01839
+  target_ratio_le_nm_p99=0.85619
+
+sparse_ratio:
+  no_motion p99=0.02057
+  fall p5=0.01713
+  target_ratio_le_nm_p99=0.28428
+```
+
+### 해석 업데이트
+
+초기 가설과 달리, 정식 pipeline 기준의 z-score 전 SDP energy는 E2 no_motion과 E1 fall 전체 세션 window를 안정적으로 분리하지 못했다. 특히 `sdp_mean_abs` 기준 fall window의 84.6%가 no_motion p99 이하에 있었다.
+
+따라서 다음 정책을 적용한다.
+
+```text
+energy hard gate 금지
+energy는 metadata/log로만 유지
+fall 세션은 전체 window를 fall로 간주하지 않고 event 중심 수집/trim/top-k window 선별 검토
+no_motion 오탐 억제는 no_motion class 학습을 우선
+```
