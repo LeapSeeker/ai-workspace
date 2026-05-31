@@ -1,6 +1,6 @@
 ﻿# SafeSignal Project State
 
-_Last updated: 2026-05-25 (정식 파이프라인 기준 SDP z-score 전 energy 분석 스크립트 추가) | Updated by: claude-code_
+_Last updated: 2026-06-01 (SafeSignal 학습/이동 준비 상태 기록) | Updated by: codex
 
 ---
 
@@ -366,6 +366,15 @@ _Last updated: 2026-05-25 (정식 파이프라인 기준 SDP z-score 전 energy 
 ---
 
 ## Review Notes
+
+### 2026-06-01 — 최종 데이터/학습 이관 준비 상태 및 main 통합 기록
+
+- 코드 상태: `wifi-csi-fall-detection`의 `codex/no-motion-baseline` 작업 브랜치를 `main`에 병합하고 원격 `origin/main`으로 push 완료. 최종 main 병합 커밋은 `0b61298 [병합] 데이터 품질 검사와 학습 준비 도구 통합`. 포함된 주요 커밋은 `721718e [수정] 데이터 품질 검사와 학습 준비 도구 정리`, `0245445 [수정] ESP32-S3 CPU 클럭 240MHz 적용`.
+- 데이터 상태: 로컬 `data/raw` 최종 CSV는 1,447개 기준으로 정리됨. 기본 7-class 학습 대상은 1,440개이며, E3 `NO_MOTION` 7개는 `finetune7` cache 생성에서 제외된다. `data/cleaned`는 timestamp 정렬본 1,447개로 재생성 완료했고, 전체 품질 검사 결과는 총 1,447개 / OK 1,419 / WARN 28 / RECOLLECT 0 / ERROR 0.
+- Drive 상태: Google Drive `SafeSignal_Dataset`에는 raw 데이터가 정리되어 있고, `cleaned`는 zip 상태로 저장되어 있음. 학습 artifact는 `SafeSignal_Dataset/SafeSignal_Training_Artifacts/`에 별도 보관하는 계획이며 대상 파일은 `safesignal_e1234_finetune7.npz`, `safesignal_e1234_finetune7.summary.json`, `best.pt`, `dataset_cache_e12_w300_s300_lag1_20_tail_ps.npz`, `requirements.lock.txt`.
+- cache 상태: 로컬 cache 원본 경로는 `model/finetune/cache/safesignal_e1234_finetune7.npz` 및 `.summary.json`. 생성 결과는 `files_seen=1440`, `files_used=1439`, `windows=3581`, `skipped={"empty_windows": 1}`. 제외된 파일은 `E4_S02_A_FALL_SIT_F_T005.csv`이며, CSV 품질은 통과하지만 rows=157로 window_size=300 미만이라 학습 window를 만들지 못함. 학교에서 재수집 가능하면 해당 파일만 교체 후 clean-csv/build-cache 재실행, 불가능하면 현재 cache로 학습 진행 가능.
+- USB/이동 준비: 코드 이관용 zip은 `C:\Project\LastProject\wifi-csi-fall-detection\.local\transfer\safesignal_code_transfer_20260601_020407.zip`에 생성 완료(약 53.5MB). USB에는 이 zip을 복사했고, 대용량 데이터는 Drive 기준으로 복구하는 전략. 다른 PC에서는 프로젝트 압축 해제 → 새 `.venv` 생성 → `pip install -r requirements.lock.txt` → cache shape 및 CUDA 확인 후 학습 실행.
+- 내일 다른 PC 체크리스트: ① `cleaned.zip` 압축 해제 경로가 `data/cleaned/*.csv` 형태인지 확인, ② artifact 5개가 지정 경로에 있는지 확인, ③ `python -c "import torch; print(torch.__version__); print(torch.cuda.is_available())"`, ④ `python -c "import numpy as np; d=np.load('model/finetune/cache/safesignal_e1234_finetune7.npz', allow_pickle=True); print(d['X'].shape, d['y'].shape)"` 기대값 `(3581, 1, 28, 20) (3581,)`, ⑤ 가능하면 `E4_S02_A_FALL_SIT_F_T005.csv` 재수집 후 cache를 재생성.
 
 ### 2026-05-22 — 대시보드 수집 품질 박스 항목별 색상 + 종합 판정 배지 ([D-025] 후속, report-only)
 
@@ -821,6 +830,36 @@ _Last updated: 2026-05-25 (정식 파이프라인 기준 SDP z-score 전 energy 
 
 
 
+
+
+
+
+
+
+### 2026-05-26 — E2 NO_MOTION 정렬 후 품질 재평가 및 재수집 예정
+
+- 발견: E2 `NO_MOTION` 10개 파일을 timestamp 정렬본(`data/cleaned`) 기준으로 재평가한 결과, timestamp reversal은 0으로 해소됐으나 6개 파일이 재수집 후보로 남음.
+- 원인 분석:
+  - `T005`, `T008`: 정렬 후에도 `gap max >= 150ms` 유지 (`T005` 약 214.3ms, `T008` 약 189.1ms) → 실제 수집 공백 가능성.
+  - `T001`, `T003`, `T009`, `T010`: `pair_dt p95 >= 25ms` 근접/초과 (`25.3~26.1ms`) → Rx1/Rx2 동시성 품질 미흡.
+  - `T002`, `T004`, `T006`, `T007`: 현 기준에서는 유지 가능.
+- 조치 계획: `NO_MOTION`은 baseline/calibration 용도라 일반 행동보다 엄격히 관리한다. 수집 전 기존 E2 `NO_MOTION` 파일은 삭제 또는 격리 후 재수집한다. 가능하면 `PAIR_TOLERANCE_US=25ms` 적용 후 E2 `NO_MOTION` 10개 전체를 다시 수집한다.
+- 주의: 원본 삭제 전 필요한 경우 `data/raw` 원본과 `data/cleaned` 정렬본의 백업/격리 위치를 명확히 한다.
+
+### 2026-05-26 — E4 수집 완료 후 모델/threshold 진행 정책
+
+- E4 본수집 완료 기준: `E4_S01`, `E4_S02`, `E4_S03` 모두 목표 trial을 채우는 것을 기준으로 한다. `NO_MOTION`은 전체 행동 수집 완료 후 마지막에 수행한다.
+- 수집 중 품질 경고 처리: 수집 중에는 pair/gap 경고를 즉시 폐기 기준으로 쓰지 않고 1차 수집 완료를 우선한다. 단, row 수가 크게 부족하거나 capture/pair rate가 지속적으로 낮거나 장치 위치/안테나/동작 수행이 명확히 잘못된 경우는 현장에서 즉시 재수집한다.
+- 재수집 판단: 수집 블록 완료 후 `clean-csv`로 timestamp 정렬본을 만든 뒤, 정렬본 기준 `loss rate`, `absolute gap p95/max`, `pair_dt p95`로 재수집 후보를 확정한다. `timestamp reversal`은 저장 순서 artifact이므로 재수집 기준에서 제외한다.
+- E2 처리: E2는 현재 제외하지 않는다. E2 현장에 다시 가서 테스트를 진행한 뒤, 기존 E2 데이터 유지/부분 재수집/전체 재수집 계획을 결정한다.
+- NO_MOTION 정책: `NO_MOTION`은 class로 유지한다. 추론 hard-gate로 바로 사용하지 않고, 우선 데이터 품질/분포 분석 및 no_motion class 학습에 활용한다. hard-gate 도입 여부는 fall 데이터 패턴 분석 이후 별도 논의한다.
+- 낙상 판단 정책: 낙상 탐지 기준은 현재 수집된 비낙상/부분 낙상 그래프만으로 확정하지 않는다. 본 낙상 데이터 수집 후 SDP/RPCA/rolling std 등에서 `낙상 전 움직임 → 낙상 순간 spike → 낙상 후 정지` 패턴이 실제로 분리되는지 분석한 뒤 결정한다.
+- threshold 정책:
+  - 공식 성능 threshold는 subject-separated fold validation 기준으로 정한다.
+  - demo operating threshold는 공식 threshold를 기본값으로 하되, 실제 시연 후보 환경(E4/E1)에서 sanity check 후 소폭 보정할 수 있다.
+  - 현재 raw 수집 데이터가 적으므로 E4/E1 데이터를 threshold 전용 validation/test로 크게 분리하지 않는다. 가능한 raw 데이터는 학습/평가 후보로 보존하고, 증강은 train split에만 적용한다.
+  - 시연 후보 환경에서 시간이 남으면 낙상 동작을 각 유형별로 추가 10회 수집하는 방안을 검토한다. 이 추가 수집분은 모델 재학습 또는 demo threshold sanity check에 활용할 수 있다.
+- 다음 액션: E4 본수집 완료 후 NO_MOTION 수집 전 시간 여유를 확인하고, 추가 낙상 수집 여부를 결정한다.
 
 
 
