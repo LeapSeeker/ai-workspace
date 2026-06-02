@@ -1,6 +1,6 @@
 ﻿# SafeSignal Project State
 
-_Last updated: 2026-06-01 (SafeSignal 학습/이동 준비 상태 기록) | Updated by: codex
+_Last updated: 2026-06-02 (fine-tuning train.py within_subject/pretrained6/on-the-fly 증강 작업 반영) | Updated by: claude-code_
 
 ---
 
@@ -353,7 +353,10 @@ _Last updated: 2026-06-01 (SafeSignal 학습/이동 준비 상태 기록) | Upda
 | preprocessing/resample.py (D-018 SafeSignal 100Hz 리샘플) | done | main | 2026-05-13 |
 | preprocessing/loader.py SafeSignal 경로 (load_safesignal_csv 등) | done | main | 2026-05-13 |
 | preprocessing/pipeline.py SafeSignal 경로 (preprocess_safesignal_file*) | done | main | 2026-05-13 |
-| fine-tuning | in progress (combined training train.py skeleton pushed; HPO/gap-quality hooks pending) | codex/finetune-train-skeleton | 2026-05-21 |
+| fine-tuning (train.py: combined training + full unfreeze + warmup, on-the-fly 증강 연결, `--class_policy finetune7/pretrained6`, `--split cross_subject/within_subject`, `--threshold_min`) | in progress (main 반영; HPO/gap-quality hooks 여전히 pending) | main `0b25a49` | 2026-06-01 |
+| verify_aug_gate.py (TrainAugmentDataset 증강 적용/Alsaify pass-through 검증 게이트) | done | main `9e3064d` | 2026-06-01 |
+| debug/modeling/derive_pretrained6_cache.py (7-class cache → running 제외 6-class 파생) | done | main `9e3064d` | 2026-06-01 |
+| debug/modeling/eval_zeroshot_by_subject.py (subject별 zero-shot 진단) | done (실측 결과 미기록) | main `0b25a49` | 2026-06-01 |
 | Pi4 하드웨어 버튼 인터페이스 | pending | - | - |
 | E2E 통합 테스트 | pending | - | - |
 | inference/ 모듈 (InferenceWorker + FallPredictor + SlidingWindowBuffer) | done | main | 2026-05-11 |
@@ -366,6 +369,26 @@ _Last updated: 2026-06-01 (SafeSignal 학습/이동 준비 상태 기록) | Upda
 ---
 
 ## Review Notes
+
+### 2026-06-01 — fine-tuning train.py: within_subject 데모 평가 모드 + pretrained6 6-class 경로 + on-the-fly 증강 연결 (진규)
+
+> 작성: claude-code (2026-06-02 반영). 어제 진규가 `feature/finetune` 작업으로 진행 후 main에 push한 코드. CODEX는 아직 모르던 상태라 여기 기록한다. 커밋: `9e3064d SafeSignal 온더플라이 증강 구현 및 검증 추가`, `0b25a49 feat: within_subject 평가 모드 + 6-class(pretrained6) 경로 + threshold_min 인자화`. 둘 다 `origin/main`에 반영됨.
+
+- **변경 파일:** `model/finetune/train.py` (+~520/-50, 두 커밋 합산), 신규 `verify_aug_gate.py`, `debug/modeling/derive_pretrained6_cache.py`, `debug/modeling/eval_zeroshot_by_subject.py`, `.gitignore` 정리.
+- **on-the-fly 증강 연결 (D-010/D-023 후속, 기존 pending이던 "TrainAugmentDataset 실제 증강 연결" 완료):**
+  - `TrainAugmentDataset`가 SafeSignal 샘플에 jittering/scaling/time_warping/noise_scale **중 하나**를 `(seed, idx, epoch)` 기반 결정론적으로 적용. Alsaify 샘플은 증강 없이 통과(pass-through).
+  - **b안(on-the-fly)** 방식 — 매 epoch `set_epoch()`로 증강이 갱신됨. train split 내부에서만 적용되며 val/test는 raw 유지 ([D-019]/[D-023] 원칙 유지).
+  - `verify_aug_gate.py`: 증강이 의도대로 적용/미적용되는지(특히 Alsaify pass-through, 결정론성) 검증하는 게이트 스크립트.
+- **pretrained6 6-class 경로 (running 제외, [D-006] best.pt 직접 평가용):**
+  - `--class_policy {finetune7, pretrained6}` 신규. `finetune7`=기존 7-class 경로 **무변경**, `pretrained6`=running 제외 6-class로 현재 `best.pt`를 **strict 로드**(head migration 우회). 6-class 전용 함수/criterion/오탐분포 함수를 7-class와 평행하게 복제했고 기존 7-class 경로는 건드리지 않음.
+  - `debug/modeling/derive_pretrained6_cache.py`: 7-class cache에서 running 제외 6-class cache를 파생 생성.
+  - `eval_zeroshot_by_subject.py`: subject별 zero-shot(파인튜닝 전 best.pt) 진단 스크립트.
+- **within_subject 데모 평가 모드 (⚠️ 정책 주의):**
+  - `--split {cross_subject, within_subject}` 신규. `cross_subject`=기존 [D-019] 3-fold 경로 **무변경**(`--fold` 사용). `within_subject`=세션(filename) 단위 subject×class 층화 분할, `--fold` 무시, `--test_ratio`로 (subject,class)별 held-out 비율 지정.
+  - 코드 주석/CLI help에 **"demo-only"**로 명시됨. `within_subject_test_report.json` 별도 출력. **[D-019]의 cross-subject가 여전히 primary 평가 기준이며 within_subject는 데모/진단용 보조 경로**다 — 공식 성능 근거로 쓰지 않는다.
+  - within_subject 리포트의 pass/fail은 [D-011] 공식 기준(recall≥0.85/FAR≤0.15/F1≥0.85)을 별도 판정 키로 사용.
+- **threshold_min 인자화:** `select_global_threshold(..., threshold_min=0.30)` + `--threshold_min` CLI. sweep 범위 `[threshold_min, 0.70]` step 0.05. 기본값 0.30으로 기존 7-class 동작 보존.
+- **CODEX 참고 / 미해결:** ① within_subject를 정식 보고 기준에 편입할지 여부는 미결정 — 현재는 데모 전용. 필요 시 D-XXX로 승격 논의. ② pretrained6 zero-shot 베이스라인 실측 결과는 아직 STATE 미기록(스크립트만 추가). ③ HPO 후속/gap-quality hook은 여전히 pending(아래 Pending Items 유지).
 
 ### 2026-06-01 — 최종 데이터/학습 이관 준비 상태 및 main 통합 기록
 
@@ -788,7 +811,7 @@ _Last updated: 2026-06-01 (SafeSignal 학습/이동 준비 상태 기록) | Upda
 - [ ] PS 비활성화 효과 검증 종료 후 RX1/RX2 디버그 카운터·stats_task 정리 (`csi_rx1_main.c`, `csi_rx2_main.c`) — 라우터 환경 재평가 마친 뒤 진행 권장 (D-018 후속)
 - [x] self-collected 100Hz 리샘플 구현 (2026-05-13 완료. `model/preprocessing/resample.py` 신규 + loader/pipeline 확장. scipy `interp1d` 대신 `np.interp` 사용 — 결과 동일, 의존성 -1. ResampleResult metadata에 gap_count/max_gap_us/original_rate_hz 노출. Alsaify 경로 무변경.)
 - [ ] portable router 확보 시 70Hz 천장 해소 가능성 재평가, 리샘플 필요성 재판단 ([D-017]/[D-018] 후속)
-- [ ] fine-tuning 후속 구현: SafeSignal CSV→raw window cache builder, Alsaify fine-tuning cache builder, TrainAugmentDataset 실제 증강 연결, 최종 eval/report 확장, 3-fold pooled global threshold selector 및 mean pass/fail 집계, full unfreeze + warmup 정책 반영 확인 (2026-05-20: combined training `model/finetune/train.py` 골격/안전장치 구현 및 검증 완료, local untracked)
+- [ ] fine-tuning 후속 구현: SafeSignal CSV→raw window cache builder, Alsaify fine-tuning cache builder, ~~TrainAugmentDataset 실제 증강 연결~~ (2026-06-01 완료 — b안 on-the-fly, `(seed,idx,epoch)` 결정론적, Alsaify pass-through, `verify_aug_gate.py` 검증. main `0b25a49`/`9e3064d`), 최종 eval/report 확장, 3-fold pooled global threshold selector 및 mean pass/fail 집계, full unfreeze + warmup 정책 반영 확인 (2026-05-20: combined training `model/finetune/train.py` 골격/안전장치 구현 및 검증 완료, local untracked → 2026-06-01 main 반영)
 - [ ] SDP z-score A안(Global) 학습/평가 후, 동일 split에서 B안(Per-lag) 재학습 ablation 수행 및 최종 정규화 방식 결정 ([D-020] 후속. A안 구현 자체는 main `14bfb12`로 2026-05-17 완료)
 - [x] ACF lag=1..20 기준으로 Alsaify 사전학습 캐시 재생성 및 `best.pt` 재학습 (`_lag1_20` 캐시 사용) (2026-05-18 완료. `dataset_cache_e12_w300_s300_lag1_20_tail_ps.npz` 기반 30epoch 재학습 — best=epoch7: fall_recall=0.922 / fall_f1=0.902 / FAR=0.029 / acc=0.791, meets_all_targets=true. lag0 포함 버전(recall=0.919/f1=0.913/FAR=0.022/acc=0.810) 대비 recall +0.003, f1 -0.011, FAR +0.007, acc -0.019 — 거의 동등. D-011 stretch(recall≥0.90) 충족)
 - [x] Google Drive 자동 업로드용 rclone 설치/설정 절차 확인 (2026-05-22: 수집 노트북 Bash 기준 `SAFESIGNAL_RCLONE_BIN`, `SAFESIGNAL_DRIVE_UPLOAD=1`, `SAFESIGNAL_DRIVE_REMOTE=gdrive:SafeSignal_Dataset`로 Drive 업로드 확인. 팀원 PC는 rclone remote 이름/실행 경로만 별도 확인)
@@ -807,6 +830,8 @@ _Last updated: 2026-06-01 (SafeSignal 학습/이동 준비 상태 기록) | Upda
 - [x] inference/ 모듈 구현 (InferenceWorker, 슬라이딩 윈도우 버퍼, 결과 큐)
 
 - [ ] HPO 후속 구현: `run_training()` 결과 객체 반환, `--hpo` 모드, Optuna objective wrapper, PatientPruner 연결, trial별 checkpoint 최소화, best trial 1회 sealed test 실행 구조 추가 ([D-024]/[D-029] 후속, fine-tuning 최종 기준 사용)
+- [ ] `--split within_subject` 데모 평가 모드의 위상 결정: 현재 코드/STATE상 demo-only 보조 경로이며 [D-019] cross-subject가 primary. 정식 보고 기준 편입 여부는 미결정 — 필요 시 D-XXX로 승격 논의 (2026-06-01 train.py 추가, main `0b25a49`)
+- [ ] pretrained6(running 제외 6-class, best.pt strict) zero-shot 베이스라인 실측 및 STATE 기록 — `--class_policy pretrained6` + `eval_zeroshot_by_subject.py` 스크립트는 준비됨, subject별 결과 수치는 미기록 (2026-06-01)
 - [x] 패킷 동기화 품질 기록/리포트 (2026-05-22 완료, 코드 커밋 `48ff88e`): CSV 110컬럼 확장으로 `timestamp_rx1_us`/`timestamp_rx2_us`/`pair_dt_us` 기록(`timestamp_us`는 Rx1 의미 유지). `collect/quality.py` 공통 helper로 pair_dt p50/p95/p99/max + ts_gap p95/max 산출. CLI(저장 질문 직전)·서버 대시보드(저장/폐기 전 품질 박스)·`check_csv_quality.py`(필수 컬럼명 검증으로 107/110 호환 + pair_dt/gap 출력)에 report-only 표시. loader는 이름 기반 선택이라 107/110 모두 (n,104)로 무변경 동작.
 - [ ] 패킷 동기화 품질 후속 ([D-025] 잔여): ① `PAIR_TOLERANCE_US`는 아직 미변경 — 실측 pair_dt/gap 분포(p95/p99) 확보 후 재조정 판단. ② pair_dt/gap threshold·WARN/RECOLLECT 기준은 분포 확보 후 결정(현재 report-only, 저장 차단 미연결). ③ offline/realtime `max_gap_ms` skip/warn 정책 정렬은 후속.
 - [ ] 공유기/채널 고정 환경에서 pair rate, loss rate, max timestamp gap, pair delay 분포 재측정 후 핫스팟 대비 개선폭과 리샘플 필요성 재평가 ([D-026] 후속)
