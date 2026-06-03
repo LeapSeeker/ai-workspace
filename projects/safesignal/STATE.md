@@ -1,6 +1,6 @@
 ﻿# SafeSignal Project State
 
-_Last updated: 2026-06-02 (fine-tuning train.py within_subject/pretrained6/on-the-fly 증강 작업 반영) | Updated by: claude-code_
+_Last updated: 2026-06-03 (D-020 트랙1/트랙2 per-lag 결과 및 global 유지 결론 반영) | Updated by: codex_
 
 ---
 
@@ -191,7 +191,7 @@ _Last updated: 2026-06-02 (fine-tuning train.py within_subject/pretrained6/on-th
   - **B안 Per-lag z-score**: `mean=sdp.mean(axis=0, keepdims=True)`, `std=sdp.std(axis=0, keepdims=True)`. B안은 각 lag별 시간축 변화량을 강조해 SafeSignal의 "낙상 순간 급격한 변화" 설명과 잘 맞지만, high-lag noise 과증폭 및 FAR 증가 가능성이 있어 ablation 후보로 유지.
   - fine-tuning 진입 후 먼저 A안으로 학습한 모델의 평가 지표를 확보한 뒤, **동일 split**에서 B안 전처리로 재학습하여 지표를 비교하고 최종 정규화 방식을 결정.
   - A/B 비교 시 `fall_recall`, `FAR`, `fall_f1`, confusion matrix, 특히 `walking/picking/sit_stand → fall` 오탐을 함께 확인. B안 적용 시 `std_floor`와 clipping(`[-5,5]` 또는 `[-3,3]`) 적용을 검토.
-- **Status:** A안 Global z-score 구현 완료 (main `14bfb12` — 2026-05-17). `window_to_model_input()` SDP 직후에 `(sdp - sdp.mean()) / (sdp.std() + 1e-6)` 적용. Alsaify·SafeSignal 양 경로 공통. 후속으로 main `8c85920` (2026-05-17)에서 `rpca_sparse()`에 degenerate 입력 방어(nan/inf → ValueError, `np.std(D) < 1e-8` → zero S 조기 반환) 추가 — constant/zero 윈도우에서 RobustPCA `mu = N/(4·‖D‖₁)`가 inf로 발산하며 발생하던 RuntimeWarning(`divide by zero` / `invalid value in multiply`) 제거. 학습/평가 및 B안 ablation 비교는 pending. final normalization choice pending ablation.
+- **Status:** A안 Global z-score 구현 완료 및 최종 유지 확정 (main `14bfb12` — 2026-05-17). `window_to_model_input()` SDP 직후에 `(sdp - sdp.mean()) / (sdp.std() + 1e-6)` 적용. Alsaify·SafeSignal 양 경로 공통. 후속 main `8c85920` (2026-05-17)에서 `rpca_sparse()` degenerate 입력 방어 추가. 2026-06-03 정식 트랙1 ablation(`debug/modeling/diag_out/track1_formal_comparison.json`)에서 B안 per-lag는 A안 대비 recall -0.030, FAR +0.016, F1 -0.033으로 net negative라 기각. 최종 정규화는 A안 global z-score 유지.
 
 ### [D-021] 자체수집 환경 구성 및 피험자 코드 확정
 - **Date:** 2026-05-18
@@ -327,6 +327,13 @@ _Last updated: 2026-06-02 (fine-tuning train.py within_subject/pretrained6/on-th
   - 코드 구현 시 이전 skeleton의 operating/stretch 명명 또는 더 엄격한 임계값이 남아 있으면 본 결정과 D-024 기준으로 정렬한다.
 - **Status:** confirmed
 
+
+### [D-030] 2026-06-04 데모 primary class policy를 pretrained6로 확정
+- **Date:** 2026-06-02
+- **Decided by:** user / codex / claude-code
+- **Content:** 데모 primary는 `running`을 제외한 6-class `pretrained6`(`fall`, `walking`, `sit_stand`, `lying`, `standing`, `picking`)로 확정한다. 7-class `finetune7`은 reference-only로 유지한다. 근거는 (1) Alsaify 사전학습 best.pt가 6-class이며 running 클래스가 공개 source에 없고, (2) 2026-06-02 CPU 30epoch within-subject 비교에서 6-class가 7-class보다 fall recall/F1이 높았으며, (3) 7-class run에서 `running→fall`이 false-positive share 약 0.244로 최대 FAR 기여원이었다는 점이다.
+- **Ref:** `docs/CODEX_HANDOFF_2026-06-02.md` (commit `237c93f`, "Key Decisions" 및 6-class vs 7-class 표), `model/finetune/train.py` commit `0b25a49` (`--class_policy pretrained6`, 6-class strict load 경로), `debug/modeling/derive_pretrained6_cache.py` commit `9e3064d`.
+- **Status:** confirmed (demo primary; [D-019] cross-subject 정식 학술 평가는 별도 유지)
 ---
 
 ## Implementation Status
@@ -344,8 +351,8 @@ _Last updated: 2026-06-02 (fine-tuning train.py within_subject/pretrained6/on-th
 | firmware/csi_rx1 (PS 비활성화 + 디버그 카운터) | done (디버그 빌드) | main | 2026-05-12 |
 | firmware/csi_rx2 (PS 비활성화 + 디버그 카운터) | done (디버그 빌드) | main | 2026-05-12 |
 | Alsaify 전체 사전학습 (E1+E2, ACF lag=1..20) | done (lag1..20 재학습) | main (`model/pretrained/checkpoints/` gitignored) | 2026-05-18 |
-| UDP 수신 서버 | pending | - | - |
-| WebSocket 서버-Pi4 통신 | pending | - | - |
+| UDP 수신 서버 (`receiver/udp_receiver.py` + `server/main.py::start_receivers`) | done (통합 서버에서 UDP 수신 시작) | main | 2026-05-11 |
+| WebSocket 서버-Pi4 통신 (`ws_handler/rpi_connection.py`, `server/main.py::RPiConnection`) | done (Pi4 outbound WebSocket 수신/낙상 알림 전송 경로 구현) | main | 2026-05-11 |
 | 자체 데이터 수집 파이프라인 (collect/, D-023/D-028 240세션·side fall 제외 정렬) | done | codex/finetune-train-skeleton `4adfbff` | 2026-05-22 |
 | server 수집 경로 (collect_manager.py invalid activity_code 가드) | done | codex/finetune-train-skeleton `4adfbff` | 2026-05-22 |
 | 수집 pair_dt/품질 기록·리포트 (CSV 110컬럼, collect/quality.py, CLI/서버UI/check_csv_quality, on_paired 카운터 정합) | done (report-only, PAIR_TOLERANCE_US 미변경) | codex/finetune-train-skeleton `48ff88e` | 2026-05-22 |
@@ -357,7 +364,11 @@ _Last updated: 2026-06-02 (fine-tuning train.py within_subject/pretrained6/on-th
 | verify_aug_gate.py (TrainAugmentDataset 증강 적용/Alsaify pass-through 검증 게이트) | done | main `9e3064d` | 2026-06-01 |
 | debug/modeling/derive_pretrained6_cache.py (7-class cache → running 제외 6-class 파생) | done | main `9e3064d` | 2026-06-01 |
 | debug/modeling/eval_zeroshot_by_subject.py (subject별 zero-shot 진단) | done (실측 결과 미기록) | main `0b25a49` | 2026-06-01 |
-| Pi4 하드웨어 버튼 인터페이스 | pending | - | - |
+| debug/modeling/build_rawsdp_cache.py (per-lag D-020용 SafeSignal raw SDP cache builder) | done (`origin/exp/perlag-cache` `0db4c26`; local `safesignal_e1234_finetune7_rawsdp.npz` 확인, X=(3581,1,28,20), full_zscore max_abs_diff=2.38e-7) | origin/exp/perlag-cache | 2026-06-03 |
+| debug/modeling/build_alsaify_rawsdp_cache.py (D-020 트랙1 Alsaify raw SDP cache builder) | done (commit `79a8f20`; pipeline.py 등 동결 파일 미수정) | main | 2026-06-03 |
+| debug/modeling/track2_probe_make_caches.py / track2_probe_analyze.py (트랙2 provisional mixed-normalization probe 로컬 스크립트) | local untracked (A/B 3-seed 완료; `track2_probe_comparison.json` 기록) | local | 2026-06-03 |
+| debug/modeling/track1_formal_make_caches.py / track1_formal_analyze.py (D-020 트랙1 정식 ablation 로컬 스크립트) | local untracked (A=both global, B=both per-lag 3-seed 완료; `track1_formal_comparison.json` 기준 per-lag 기각) | local | 2026-06-03 |
+| Pi4 하드웨어 버튼 인터페이스 | pending (rpi4/는 문서/가이드 중심, 실제 버튼 I/O 구현 미확인) | - | - |
 | E2E 통합 테스트 | pending | - | - |
 | inference/ 모듈 (InferenceWorker + FallPredictor + SlidingWindowBuffer) | done | main | 2026-05-11 |
 | main 브랜치 통합 (server/dongseok + feature/pretrained-model) | done | main | 2026-05-11 |
@@ -369,6 +380,39 @@ _Last updated: 2026-06-02 (fine-tuning train.py within_subject/pretrained6/on-th
 ---
 
 ## Review Notes
+
+### 2026-06-03 — D-020 per-lag 트랙2/트랙1 결과 및 최종 정규화 선택 (Codex)
+
+- **검증 입력:** `debug/modeling/diag_out/track2_probe_comparison.json`, `track2_probe_cache_summary.json`, `track1_formal_comparison.json`, `track1_formal_cache_summary.json`을 직접 확인했다. worktree에는 로컬 실행 스크립트 `debug/modeling/track1_formal_make_caches.py`, `track1_formal_analyze.py`, `track2_probe_make_caches.py`, `track2_probe_analyze.py` 4개가 untracked이며, main 커밋 이력은 2026-05-29 이후 `721718e`→`79a8f20`까지 기존 정리와 동일하다.
+- **트랙2 PROVISIONAL mixed-normalization probe:** SafeSignal만 per-lag, Alsaify는 global cache 고정이라 D-020 정식 결론용이 아니다. control gate는 seed42 A(global) R=0.7153/FAR=0.1609로 baseline reference R=0.781/FAR=0.134 대비 recall -0.0657, FAR +0.0269라 경고 band(±0.05~0.10)다. 3-seed 평균은 A(global) R=0.7384±0.0590/FAR=0.1444±0.0190/F1=0.6688±0.0280, B(per-lag mixed) R=0.7269±0.0579/FAR=0.1451±0.0165/F1=0.6614±0.0457. standing→fall은 평균 -0.0509로 좋아 보이나 seed44에서는 악화되어 부호 불일치이고, walking→fall은 +0.0586으로 3-seed 모두 악화했다. 해석: 약한 mixed signal이며 단독 기각/채택 근거가 아니다.
+- **트랙1 D-020 정식 ablation:** SafeSignal+Alsaify 모두 같은 raw/order/HP에서 A=both global, B=both per-lag로 비교했다. cache summary 기준 SafeSignal A-global은 기존 finetune7 global과 allclose true(max_abs_diff=2.3841858e-7), Alsaify A-global self-consistent z-score는 ok(`z_mean_absmax=1.5412058e-7`), per-lag clipped_ratio는 SafeSignal 0.00187, Alsaify 0.00324(`STD_FLOOR=1e-4`, `EPS=1e-6`, `CLIP=3.0`)다. 6-class 파생 후 shapes/counts는 SafeSignal 3041 windows(`fall 718 / walking 540 / sit_stand 524 / lying 539 / standing 360 / picking 360`), Alsaify 8326 windows(`fall 1600 / walking 1600 / sit_stand 1515 / lying 1600 / standing 1211 / picking 800`)로 라벨 0..5 범위가 유지됐다.
+- **트랙1 결과와 결론:** A(both global)는 R=0.7384±0.0378/FAR=0.1437±0.0311/F1=0.6708±0.0186, B(both per-lag)는 R=0.7083±0.0547/FAR=0.1594±0.0430/F1=0.6374±0.0143이다. paired delta는 recall -0.0301(부호 불일치), FAR +0.0157(3-seed 일관 악화), F1 -0.0334(3-seed 일관 악화). standing→fall은 평균 -0.0880이나 seed43 무변동으로 일관성이 없고, walking→fall +0.0617 및 picking→fall +0.0509는 일관 악화다. 따라서 D-020 B안 per-lag는 정식 ablation 기준 기각하고, 최종 정규화는 A안 global z-score를 유지한다.
+- **다음 방향:** event-level sweep과 forward/tail 진단상 후처리만으로 recall 0.85/FAR 0.15 동시 달성이 어렵고, per-lag도 net negative였다. 다음 개선 후보는 post-fall 정적 단서 의존을 줄이고 transient supervision을 강화하는 event-centered windowing/labeling이지만, 아직 결정·구현·실험된 항목은 아니므로 Pending 탐색 과제로만 둔다.
+
+### 2026-06-03 — 2026-05-29 이후 모델 진단/트랙2 probe 진행분 정리 (Codex)
+
+- **대조 범위:** `wifi-csi-fall-detection`의 2026-05-29 이후 커밋은 `721718e`, `0245445`, `d7c3aaa`, `0b61298`, `9e3064d`, `0b25a49`, `237c93f`, `0772a74`, `d291c87`, `6b7705e`, `79a8f20` 순서로 확인했다. 현재 `HEAD == origin/main == 79a8f20`이고 worktree에는 로컬 per-lag 실행 스크립트 4개(`track1_formal_*`, `track2_probe_*`)가 untracked다.
+- **데이터/학습 준비 통합(2026-06-01):** `721718e`와 merge `0b61298`는 데이터 품질 검사와 학습 준비 도구를 main에 통합했고, `0245445`는 ESP32-S3 CPU 클럭 240MHz 적용을 포함한다. 이 내용은 기존 `2026-06-01 — 최종 데이터/학습 이관 준비 상태 및 main 통합 기록`에 이미 반영되어 있어 중복 추가하지 않았다.
+- **on-the-fly 증강 + within_subject/pretrained6 경로(2026-06-01):** `9e3064d`는 `TrainAugmentDataset` 실제 증강 연결과 `verify_aug_gate.py` 검증 게이트를 추가했고, `0b25a49`는 `--class_policy pretrained6`, `--split within_subject`, `--threshold_min` 경로를 추가했다. 기존 Review Notes에 구현 내용은 반영돼 있으나, 데모 primary 6-class 확정은 Decisions Log에 없어서 [D-030]으로 추가했다.
+- **6-class/7-class CPU 비교 및 병목:** `docs/CODEX_HANDOFF_2026-06-02.md`(commit `237c93f`) 기준 CPU-only 30epoch within-subject 비교는 6-class `pretrained6` R=0.736/F1=0.660/FAR=0.152, 7-class `finetune7` R=0.646/F1=0.583/FAR=0.143이다. 7-class false-positive share는 running 약 0.244로 기록되어 6-class demo-primary 결정의 근거가 됐다. 현재 로컬 `checkpoints_compare6_cpu/within_subject_test_report.json`도 threshold=0.1, R=0.736111, F1=0.660436, FAR=0.152361, `standing→fall` FP share=0.309859를 확인했다. 사용자 기준선의 `checkpoints_compare6_cpu best_operating R=0.781/F1=0.698/FAR=0.134`는 현재 로컬 `checkpoints_compare6_cpu` 산출물과 일치하지 않으며, 비슷한 수치는 2026-06-03 track2 A안 seed42의 별도 run에서 R=0.715/F1=0.640/FAR=0.161로도 재현되지 않았다. 따라서 STATE에는 산출물 기준 0.736/0.660/0.152를 기록한다.
+- **zero-shot subject 진단:** `debug/modeling/eval_zeroshot_by_subject.py`(commit `0b25a49`)는 stdout-only라 기존 산출 파일은 없었다. Codex가 `.codex-test-venv` CPU로 재실행해 확인한 결과, Alsaify `best.pt`를 SafeSignal `safesignal_e1234_pretrained6.npz`에 fine-tuning 없이 적용하면 threshold 0.30에서 S01 R=0.146/FAR=0.028/F1=0.236, S02 R=0.076/FAR=0.021/F1=0.132, S03 R=0.246/FAR=0.026/F1=0.370이다. threshold sweep 0.30~0.70에서 best-recall도 모두 threshold 0.30이었다. 결론은 도메인 갭(Alsaify Intel 5300 ↔ ESP32 SafeSignal)과 피험자 3명 데이터 한계가 recall 천장의 주원인이라는 해석을 지지하며, 파이프라인 자체 결함으로 단정할 근거는 없다.
+- **Step1 fall window 희석 진단:** `d291c87`는 `debug/modeling/diag_fall_window_dilution.py`를 추가했고, 산출물은 `debug/modeling/diag_out/fall_window_dilution_summary.csv` 등이다. CSV 144 rows(6 subtypes × 12 files × forward/tail) 기준 `n_frames` mean≈552라 tail window는 대체로 세션 후반 `[2.5s:5.5s]`에 걸린다. 전체 평균으로 forward `energy_in_fall_ratio`=0.7531, `attn_in_fall_range`=0.9167, `peak_in_fall_rate`=0.9167이고, tail은 각각 0.2537, 0.0972, 0.5833이다. 즉 tail은 완전한 junk는 아니지만 대부분 post-fall stillness를 담아 weak-label transient dilution을 만든다.
+- **Step2 event-level sweep/forward-tail 진단:** `0772a74`는 `debug/modeling/diag_event_sweep.py`를 추가했다. 2026-06-03 기존 STATE Review Notes의 step2 수치(event_recall 최대 0.6528 @ FAR 0.1111, forward/tail threshold=0.2 recall 0.5417/0.8333, tail-only rescue=31)는 이미 반영되어 있어 중복하지 않는다. 단 `237c93f` handoff 문서에 남은 Step3-a(tail down-weight) 제안은 step2 결과 이후 stale이며, 현재 Pending/Review Notes는 tail down-weight 폐기 방향으로 정정한다.
+- **checkpoint metadata fix:** `6b7705e`는 `model/finetune/train.py`의 `save_checkpoint()`에 `class_policy`와 정책별 `classes` 저장을 보강하고, 빈 batch 평가 시 output shape를 모델 output dim 기준으로 반환하도록 수정했다. 이는 6-class/7-class checkpoint 혼동 방지용이며 [D-030] 및 step2 checkpoint 검증과 연결된다.
+- **D-020 per-lag 트랙 구조:** 트랙1은 Alsaify+SafeSignal 모두 raw SDP에서 동일 정규화로 비교하는 정식 ablation이고, 트랙2는 SafeSignal만 per-lag, Alsaify는 기존 global z-score cache로 고정하는 `PROVISIONAL mixed-normalization probe`다. 트랙2는 positive면 트랙1 투자 가치가 있다는 신호로 보고, null/negative는 mixed-normalization + global-pretrained warm-start mismatch 핸디캡 때문에 단독 기각 근거로 쓰지 않는다. per-lag 수식은 per-window self-normalization이며 4D X=(N,1,28,20)에서 axis=2(시간 28) 축약, lag 20개 독립, `STD_FLOOR=1e-4`, `EPS=1e-6`, `CLIP=3.0`로 고정한다. train split 통계 fit 방식은 사용하지 않으므로 split 이전 cache 생성이 val/test 통계 누수가 아니다. 단 D-020의 리스크(RPCA와 역할 중복으로 증분 제한, high-lag noise 과증폭으로 FAR 증가)는 유지한다.
+- **SafeSignal raw SDP cache:** `origin/exp/perlag-cache`의 `debug/modeling/build_rawsdp_cache.py`(`0db4c26`)로 생성된 `model/finetune/cache/safesignal_e1234_finetune7_rawsdp.npz`가 현재 로컬에 존재한다. 확인 결과 `X=(3581,1,28,20)`, `normalization=none_raw_sdp`, `classes=finetune7`, `is_augmented` 전부 False, full provenance(`source/env/filename/activity/trial/within_file_index`) 포함. `debug/modeling/diag_out/track2_probe_cache_summary.json` 기준 A안 raw→global allclose vs 기존 finetune7 X는 true, max_abs_diff=2.3841858e-7이다.
+- **Alsaify raw SDP cache:** `79a8f20`은 `debug/modeling/build_alsaify_rawsdp_cache.py`를 추가했다. 로컬 dry-run 로그(`debug/modeling/diag_out/alsaify_rawsdp_build.log`)는 5파일/10윈도우 raw std≈0.05475, self-consistent global z-score 후 mean≈0/std≈1 PASS를 기록했다. 현재 로컬에는 팀원 PC 본 빌드 산출물로 보이는 `model/pretrained/checkpoints/dataset_cache_e12_w300_s300_lag1_20_tail_ps_rawsdp.npz`가 있으며, 확인 결과 `X=(8326,1,28,20)`, `normalization=none_raw_sdp`, raw X.std=0.046756, class counts `{fall:1600, walking:1600, sit_stand:1515, lying:1600, standing:1211, picking:800}`로 기존 z-score Alsaify cache와 분포가 일치한다. 다만 사용자 기준선의 build time 145.5min은 현재 로컬 로그에는 없어서 STATE에 확정 수치로 쓰지 않는다.
+- **Track2 provisional probe 상태 정정:** 2026-06-03 후속 실행으로 B안까지 완료되어 `track2_probe_comparison.json`이 생성됐다. 이 이전 기록의 “B안 미완료” 상태는 stale이며, 상세 수치와 해석은 위 `D-020 per-lag 트랙2/트랙1 결과` 엔트리를 기준으로 한다.
+- **구현 상태 stale 정정:** `server/main.py`는 `start_receivers()`로 UDP 수신을 시작하고, `RPiConnection` WebSocket 서버, `send_fall_sms()` SOLAPI 알림, `InferenceWorker`를 통합한다. `server/inference/buffer.py`는 `_resample_uniform()`과 `np.interp` 기반 timestamp-aware 100Hz realtime resampling을 이미 구현했다. 따라서 Implementation Status와 Pending Items의 UDP/WebSocket/realtime resampling pending 표현을 코드 기준으로 정정한다. 단 Pi4 하드웨어 버튼 인터페이스, E2E 실기 통합 테스트, non-fall 저장 방식, HPO 구현, 3-fold pooled threshold selector, gap-quality 저장 차단, stride latency 실측은 계속 pending이다.
+
+### 2026-06-03 — step2 event-level sweep 재검증 및 per-lag raw SDP cache 확인 (Codex)
+
+- **검증 입력:** `debug/modeling/diag_out/event_sweep_results.csv`, `forward_tail_split_diag.csv`, `step2_run.log`, `diag_event_sweep.py`, `model/finetune/cache/safesignal_e1234_finetune7.npz` 및 `.summary.json`, `origin/exp/perlag-cache:debug/modeling/build_rawsdp_cache.py`를 확인했다. 최초 기록 시점에는 raw SDP cache/handoff flag를 확인하지 못했으나, 2026-06-03 후속 대조에서 `model/finetune/cache/safesignal_e1234_finetune7_rawsdp.npz`와 `track2_probe_cache_summary.json`을 확인했고 raw→global allclose max_abs_diff=2.3841858e-7로 정정한다. `D:\handoff` flag 자체는 현재 파일시스템에서 확인하지 못했으므로, 완료 근거는 로컬 `.npz`/summary 산출물 기준이다.
+- **step2 split/checkpoint sanity:** `step2_run.log` 기준 within-subject split은 seed=42, val=0.2, test=0.2 재실행으로 total=1259/train=800/val=207/test=252 세션, held-out fall=72/non-fall=180(RUN 제외 pretrained6). 학습 cache 동일 2-window sanity에서 fall window recall @0.1 = 0.736(106/144)로 `within_subject_test_report.json`의 fall_recall=0.736과 일치한다고 로그에 기록되어 split·checkpoint 재현은 일관된다. checkpoint는 `model/finetune/checkpoints_compare6_cpu/best_operating.pt`이며 로그가 CPU 30epoch fallback으로 명시하므로 절대 성능 수치가 아니라 후처리 sweep 방법검증용이다. 본판 `within_6class_recall_aug`/GPU 학습 checkpoint 재검증은 이번 산출물에 없으므로 다음 과제로 유지한다.
+- **event-level sweep 결과:** `event_sweep_results.csv`는 60 config(5 thresholds × 2 N × 3 margin × 2 stride). FAR≤0.15 후보는 18개이며, event_recall 최대 운영점은 `threshold_min=0.1`, `N=2`, `margin=on_m0.2`, `stride=50`에서 event_recall=0.6528, event_FAR=0.1111, event_F1=0.6763, TP=47/FP=20/FN=25/TN=160이다. 동일 metric tie로 threshold 0.15/0.2/0.25/0.3도 같은 수치다. recall≥0.85 config는 27개이나 최저 FAR가 0.2944라 FAR≤0.15 목표와 양립하지 않는다. N=1/margin off는 recall 0.9167~0.9861이지만 FAR 0.3556~0.6833으로 사용 불가다. 결론: threshold/N/margin 후처리만으로 D-011 recall 0.85/FAR 0.15 동시 달성은 어렵고 모델 자체 개선이 필요하다. N=2는 특히 stride=100에서 spike형 단일-window 낙상 recall을 크게 깎는다.
+- **forward/tail 진단:** `forward_tail_split_diag.csv` 기준 threshold=0.2에서 forward recall=0.5417(39/72, FN=33, non-fall FP=30/286), tail recall=0.8333(60/72, FN=12, non-fall FP=20/180), tail-only rescue=31, forward-only=10이다. threshold=0.3에서는 forward recall=0.4722, tail recall=0.7917, tail-only rescue=32, forward-only=9다. 기존 step1의 tail post-fall attention 해석과 맞게 모델은 낙상 순간보다 낙상 후 바닥 정적(post-fall)을 강한 fall 단서로 쓰는 것으로 보인다. 따라서 step3-a(tail down-weight/제외)는 recall 파괴 위험이 커서 남은 카드에서 제외한다.
+- **per-lag raw SDP cache 상태:** 로컬 finetune7 cache는 `X=(3581,1,28,20)`, `y=(3581,)`, distinct filename=1439, class_counts=`fall 718 / walking 540 / sit_stand 524 / lying 539 / standing 360 / running 540 / picking 360`, `files_seen=1440`, `files_used=1439`, `skipped={"empty_windows":1}`로 확인했다. `origin/exp/perlag-cache`의 `build_rawsdp_cache.py`는 이 filename 목록을 입력 소스로 쓰고 디렉터리 glob을 쓰지 않으며, raw SDP를 `normalization="none_raw_sdp"`로 저장하고 provenance(`filename/within_file_index/y/subject/env/activity/trial/classes/class_policy`)를 동봉하도록 설계되어 있다. 2026-06-03 후속 대조 기준 `safesignal_e1234_finetune7_rawsdp.npz`가 로컬에 존재하고, `track2_probe_cache_summary.json`에서 A안 raw→global allclose max_abs_diff=2.3841858e-7을 확인했다.
+- **다음 과제 정정:** 트랙2와 트랙1은 2026-06-03 후속 실행으로 완료됐고, D-020 정식 결론은 per-lag 기각/global 유지다. 남은 모델 개선 후보는 본판 checkpoint로 step2 forward/tail 패턴 재검증, 그리고 event-centered windowing/labeling 탐색이다.
 
 ### 2026-06-01 — fine-tuning train.py: within_subject 데모 평가 모드 + pretrained6 6-class 경로 + on-the-fly 증강 연결 (진규)
 
@@ -388,7 +432,7 @@ _Last updated: 2026-06-02 (fine-tuning train.py within_subject/pretrained6/on-th
   - 코드 주석/CLI help에 **"demo-only"**로 명시됨. `within_subject_test_report.json` 별도 출력. **[D-019]의 cross-subject가 여전히 primary 평가 기준이며 within_subject는 데모/진단용 보조 경로**다 — 공식 성능 근거로 쓰지 않는다.
   - within_subject 리포트의 pass/fail은 [D-011] 공식 기준(recall≥0.85/FAR≤0.15/F1≥0.85)을 별도 판정 키로 사용.
 - **threshold_min 인자화:** `select_global_threshold(..., threshold_min=0.30)` + `--threshold_min` CLI. sweep 범위 `[threshold_min, 0.70]` step 0.05. 기본값 0.30으로 기존 7-class 동작 보존.
-- **CODEX 참고 / 미해결:** ① within_subject를 정식 보고 기준에 편입할지 여부는 미결정 — 현재는 데모 전용. 필요 시 D-XXX로 승격 논의. ② pretrained6 zero-shot 베이스라인 실측 결과는 아직 STATE 미기록(스크립트만 추가). ③ HPO 후속/gap-quality hook은 여전히 pending(아래 Pending Items 유지).
+- **CODEX 참고 / 미해결:** ① within_subject를 정식 보고 기준에 편입할지 여부는 미결정 — 현재는 데모 전용. 필요 시 D-XXX로 승격 논의. ② pretrained6 zero-shot 베이스라인은 2026-06-03 Codex가 CPU로 재실행해 STATE에 기록 완료. ③ HPO 후속/gap-quality hook은 여전히 pending(아래 Pending Items 유지).
 
 ### 2026-06-01 — 최종 데이터/학습 이관 준비 상태 및 main 통합 기록
 
@@ -634,7 +678,7 @@ _Last updated: 2026-06-02 (fine-tuning train.py within_subject/pretrained6/on-th
 - Pi4 포맷 확정: `class` 키 사용 안 함, `label` 사용 (Python/JSON 소비 측에서 `class`는 예약어 혼동 회피). D-008 본문은 `event/class/confidence/timestamp_us`로 표기되어 있고 context/SHARED.md도 일관되지 않음 — 이번 구현부터 위 JSON으로 통일. test/test_pi4_ws.py도 `if message == "FALL_DETECTED":` 문자열 비교를 `json.loads()` 후 `event=="fall_detected" AND label=="fall"` 확인으로 갱신, confidence/seq/ts 로깅 추가. Pi4 실제 수신 코드는 아직 미구현이므로 서버측 포맷이 reference.
 - `server/config/settings.py`: `SUBCARRIER_COUNT`를 64 → 52로 수정 (D-007 LLTF 기준 Rx 단일 패킷). `SUBCARRIER_COUNT_CONCAT=104` 신규 추가 (D-013 Rx1+Rx2 concat 추론 입력). 대시보드/PairingBuffer/PacketMonitor 등 기존 코드가 참조하는 키는 `device_id/seq_num/timestamp_us/n_subcarriers/amplitudes` 그대로 유지됨.
 - `server/receiver/udp_receiver.py`: 기존 `HEADER_FORMAT="<BIQH"` (15B) — n_subcarriers를 헤더에서 받는 옛 구조 → D-007 `"<BBbBIQ"` (16B header + 52f amplitude = 224B) 로 교체. `parse_packet()`은 size<224 / magic≠0xAB / device_id∉{RX1,RX2} 모두 None 반환. 반환 dict 키 (device_id/rssi/seq_num/timestamp_us/n_subcarriers=52/amplitudes(list len 52))로 downstream 호환 유지.
-- UDP 실기 수신 테스트는 이번 작업에서 수행하지 않음 (py_compile + self-check 수준). 실기 ESP32 패킷 수신 검증은 별도 진행. Implementation Status의 "UDP 수신 서버" 행은 그대로 pending 유지.
+- UDP 수신 서버 구현 자체는 이후 `server/main.py::start_receivers()` 통합 기준으로 Implementation Status를 done으로 정정했다. 다만 ESP32 실기 패킷 수신 리허설은 별도 검증 항목으로 남는다.
 - self-check (`server/inference/_selfcheck.py`): 4-case 모두 통과 — (1) D-007 224B 더미 패킷 parse 정상/size·magic·device_id 불일치 None / (2) SlidingWindowBuffer (300,104) shape + stride trigger 정확히 [300,400,500] / (3) MODEL_PATH `Path` 절대 경로 + 파일명 best.pt (존재 확인 안 함) / (4) InferenceWorker start() 없이 put/get_result 예외 없음. `ALL_OK` 출력. self-check는 torch/checkpoint/RPCA를 import하지 않음 — `worker.py` top-level에 predictor import가 없기 때문. _selfcheck.py 시작부에서 script dir(server/inference/)을 sys.path에서 제거해야 `server/inference/config.py` 모듈이 `server/config/` 네임스페이스 패키지를 가리지 않음(이 트릭 없으면 `from config.settings import ...` 에서 `config is not a package` 에러).
 - py_compile 검증: 9개 파일 (`server/inference/{__init__,config,buffer,predictor,worker}.py`, `server/main.py`, `server/receiver/udp_receiver.py`, `server/ws_handler/rpi_connection.py`, `server/config/settings.py`) 전부 통과.
 - 의존성 추가: `python-dotenv` (server/requirements.txt에 이미 명시되어 있었으나 로컬 환경 미설치 상태였음 → 설치). 신규 의존성 추가는 없음.
@@ -811,17 +855,19 @@ _Last updated: 2026-06-02 (fine-tuning train.py within_subject/pretrained6/on-th
 - [ ] PS 비활성화 효과 검증 종료 후 RX1/RX2 디버그 카운터·stats_task 정리 (`csi_rx1_main.c`, `csi_rx2_main.c`) — 라우터 환경 재평가 마친 뒤 진행 권장 (D-018 후속)
 - [x] self-collected 100Hz 리샘플 구현 (2026-05-13 완료. `model/preprocessing/resample.py` 신규 + loader/pipeline 확장. scipy `interp1d` 대신 `np.interp` 사용 — 결과 동일, 의존성 -1. ResampleResult metadata에 gap_count/max_gap_us/original_rate_hz 노출. Alsaify 경로 무변경.)
 - [ ] portable router 확보 시 70Hz 천장 해소 가능성 재평가, 리샘플 필요성 재판단 ([D-017]/[D-018] 후속)
-- [ ] fine-tuning 후속 구현: SafeSignal CSV→raw window cache builder, Alsaify fine-tuning cache builder, ~~TrainAugmentDataset 실제 증강 연결~~ (2026-06-01 완료 — b안 on-the-fly, `(seed,idx,epoch)` 결정론적, Alsaify pass-through, `verify_aug_gate.py` 검증. main `0b25a49`/`9e3064d`), 최종 eval/report 확장, 3-fold pooled global threshold selector 및 mean pass/fail 집계, full unfreeze + warmup 정책 반영 확인 (2026-05-20: combined training `model/finetune/train.py` 골격/안전장치 구현 및 검증 완료, local untracked → 2026-06-01 main 반영)
-- [ ] SDP z-score A안(Global) 학습/평가 후, 동일 split에서 B안(Per-lag) 재학습 ablation 수행 및 최종 정규화 방식 결정 ([D-020] 후속. A안 구현 자체는 main `14bfb12`로 2026-05-17 완료)
+- [ ] fine-tuning 후속 구현: ~~SafeSignal CSV→raw window cache builder~~ (finetune7/global cache 및 D-020 raw SDP cache 생성 완료), Alsaify fine-tuning cache builder/정식 raw SDP cache 운용 검증, ~~TrainAugmentDataset 실제 증강 연결~~ (2026-06-01 완료 — b안 on-the-fly, `(seed,idx,epoch)` 결정론적, Alsaify pass-through, `verify_aug_gate.py` 검증. main `0b25a49`/`9e3064d`), 최종 eval/report 확장, 3-fold pooled global threshold selector 및 mean pass/fail 집계, full unfreeze + warmup 정책 반영 확인 (2026-05-20 골격 구현, 2026-06-01 main 반영)
+- [x] SDP z-score 후속(D-020): per-lag는 train-split-stat이 아니라 per-window self-normalization으로 probe/ablation했다(axis=2, std_floor=1e-4, eps=1e-6, clip=±3). SafeSignal raw SDP cache와 Alsaify raw SDP cache를 확인한 뒤 트랙2 `PROVISIONAL mixed-normalization probe`와 트랙1 정식 ablation(Alsaify+SafeSignal 모두 동일 정규화)을 2026-06-03 완료했다. 정식 트랙1 결과는 A(global) R=0.738±0.038/FAR=0.144±0.031/F1=0.671±0.019, B(per-lag) R=0.708±0.055/FAR=0.159±0.043/F1=0.637±0.014로 B안 net negative. 최종 정규화는 global z-score 유지, per-lag 기각. step3-a(tail down-weight/제외)는 forward/tail 진단상 tail-only rescue 31~32세션으로 recall 파괴 위험이 커 후보에서 제외. ([D-020] 후속. A안 구현 자체는 main `14bfb12`로 2026-05-17 완료)
+- [ ] event-centered windowing/labeling 탐색: D-020 per-lag가 기각되고 step2 후처리 sweep도 recall 0.85/FAR 0.15 동시 달성에 실패했으므로, post-fall 정적 단서 의존을 줄이고 transient supervision을 강화하는 window/label 설계를 다음 후보로 검토한다. 아직 결정·구현·실험된 항목은 아니며, 2026-06-11 발표 전 우선순위와 실험 범위 확정 필요.
 - [x] ACF lag=1..20 기준으로 Alsaify 사전학습 캐시 재생성 및 `best.pt` 재학습 (`_lag1_20` 캐시 사용) (2026-05-18 완료. `dataset_cache_e12_w300_s300_lag1_20_tail_ps.npz` 기반 30epoch 재학습 — best=epoch7: fall_recall=0.922 / fall_f1=0.902 / FAR=0.029 / acc=0.791, meets_all_targets=true. lag0 포함 버전(recall=0.919/f1=0.913/FAR=0.022/acc=0.810) 대비 recall +0.003, f1 -0.011, FAR +0.007, acc -0.019 — 거의 동등. D-011 stretch(recall≥0.90) 충족)
 - [x] Google Drive 자동 업로드용 rclone 설치/설정 절차 확인 (2026-05-22: 수집 노트북 Bash 기준 `SAFESIGNAL_RCLONE_BIN`, `SAFESIGNAL_DRIVE_UPLOAD=1`, `SAFESIGNAL_DRIVE_REMOTE=gdrive:SafeSignal_Dataset`로 Drive 업로드 확인. 팀원 PC는 rclone remote 이름/실행 경로만 별도 확인)
-- [ ] E2E 실시간 추론 단계에서 `server/inference/buffer.py`를 timestamp-aware 100Hz resampling buffer로 전환
+- [x] E2E 실시간 추론 단계에서 `server/inference/buffer.py`를 timestamp-aware 100Hz resampling buffer로 전환 (코드상 `_resample_uniform()` + `np.interp`, Rx1 timestamp 기준 grid timestamp 보존 확인. 단 max_gap_ms hard skip/warn 정책은 아직 report/정책 후속)
 - [ ] `wifi_event_group` 미사용 잔재 변수 정리 (`csi_rx1_main.c:86`, RX2 동일)
 - [x] Alsaify 전체 사전학습 실행 (2026-05-14 팀원 결과 수령·로컬 적용 — best fall_recall=0.919 / F1=0.913 / FAR=0.022, meets_all_targets=true)
 - [x] `preprocess_directory()`에 `tail_window` 옵션 추가 (윈도우-only 디버깅/분석 API 일관성 보완)
 - [ ] Sliding window size 실험적 결정 (데이터 수집 후)
 - [x] fine-tuning 자체수집 최종 기준 확정 (2026-05-21 완료. [D-028] 기준 — 4개 환경, 6개 env-subject 조합, 조합당 240세션, 총 1,440세션 목표. 일정/환경 문제로 변동 가능)
 - [ ] 보호자 알림 상세 시나리오 확정 (동석 담당, SOLAPI vs KakaoTalk 포함)
+- [ ] E2E 통합 테스트(실장치/시연 루프): UDP 수신/WebSocket/SMS/InferenceWorker 코드는 통합돼 있으나, 실제 Pi4 장치·오디오·버튼·SMS 포함 end-to-end 리허설 결과는 미기록
 - [ ] ESP32 3대 배터리 런타임 정량화
 - [ ] GitHub 브랜치 전략 확정
 - [ ] 포터블 라우터 사용 가능 여부 확인
@@ -831,7 +877,8 @@ _Last updated: 2026-06-02 (fine-tuning train.py within_subject/pretrained6/on-th
 
 - [ ] HPO 후속 구현: `run_training()` 결과 객체 반환, `--hpo` 모드, Optuna objective wrapper, PatientPruner 연결, trial별 checkpoint 최소화, best trial 1회 sealed test 실행 구조 추가 ([D-024]/[D-029] 후속, fine-tuning 최종 기준 사용)
 - [ ] `--split within_subject` 데모 평가 모드의 위상 결정: 현재 코드/STATE상 demo-only 보조 경로이며 [D-019] cross-subject가 primary. 정식 보고 기준 편입 여부는 미결정 — 필요 시 D-XXX로 승격 논의 (2026-06-01 train.py 추가, main `0b25a49`)
-- [ ] pretrained6(running 제외 6-class, best.pt strict) zero-shot 베이스라인 실측 및 STATE 기록 — `--class_policy pretrained6` + `eval_zeroshot_by_subject.py` 스크립트는 준비됨, subject별 결과 수치는 미기록 (2026-06-01)
+- [x] pretrained6(running 제외 6-class, best.pt strict) zero-shot 베이스라인 실측 및 STATE 기록 (2026-06-03 Codex CPU 재실행): thr0.30 subject recall S01=0.146 / S02=0.076 / S03=0.246, FAR 0.028/0.021/0.026. 도메인 갭+소수 피험자 데이터 한계 해석 보강
+- [ ] 본판 `within_6class_recall_aug`/GPU 학습 checkpoint로 step2 event-level 후처리 sweep 및 forward/tail 분리 진단 재검증 (2026-06-03 CPU 30epoch fallback 결과는 방법검증용으로 기록됨)
 - [x] 패킷 동기화 품질 기록/리포트 (2026-05-22 완료, 코드 커밋 `48ff88e`): CSV 110컬럼 확장으로 `timestamp_rx1_us`/`timestamp_rx2_us`/`pair_dt_us` 기록(`timestamp_us`는 Rx1 의미 유지). `collect/quality.py` 공통 helper로 pair_dt p50/p95/p99/max + ts_gap p95/max 산출. CLI(저장 질문 직전)·서버 대시보드(저장/폐기 전 품질 박스)·`check_csv_quality.py`(필수 컬럼명 검증으로 107/110 호환 + pair_dt/gap 출력)에 report-only 표시. loader는 이름 기반 선택이라 107/110 모두 (n,104)로 무변경 동작.
 - [ ] 패킷 동기화 품질 후속 ([D-025] 잔여): ① `PAIR_TOLERANCE_US`는 아직 미변경 — 실측 pair_dt/gap 분포(p95/p99) 확보 후 재조정 판단. ② pair_dt/gap threshold·WARN/RECOLLECT 기준은 분포 확보 후 결정(현재 report-only, 저장 차단 미연결). ③ offline/realtime `max_gap_ms` skip/warn 정책 정렬은 후속.
 - [ ] 공유기/채널 고정 환경에서 pair rate, loss rate, max timestamp gap, pair delay 분포 재측정 후 핫스팟 대비 개선폭과 리샘플 필요성 재평가 ([D-026] 후속)
@@ -885,6 +932,10 @@ _Last updated: 2026-06-02 (fine-tuning train.py within_subject/pretrained6/on-th
   - 현재 raw 수집 데이터가 적으므로 E4/E1 데이터를 threshold 전용 validation/test로 크게 분리하지 않는다. 가능한 raw 데이터는 학습/평가 후보로 보존하고, 증강은 train split에만 적용한다.
   - 시연 후보 환경에서 시간이 남으면 낙상 동작을 각 유형별로 추가 10회 수집하는 방안을 검토한다. 이 추가 수집분은 모델 재학습 또는 demo threshold sanity check에 활용할 수 있다.
 - 다음 액션: E4 본수집 완료 후 NO_MOTION 수집 전 시간 여유를 확인하고, 추가 낙상 수집 여부를 결정한다.
+
+
+
+
 
 
 
