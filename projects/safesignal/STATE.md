@@ -1,6 +1,6 @@
 ﻿# SafeSignal Project State
 
-_Last updated: 2026-06-05 (D-031 선행 게이트 1 — beep concat artifact sanity 통과, clean400_concat 유지 확정) | Updated by: claude-code_
+_Last updated: 2026-06-05 (D-031 Gate 1 clean400_concat 확정 + Gate 2 onset detector 기준 확정 nominal/k3/s5/soft set A — final onset_manifest는 needs_review/manual 후 pending) | Updated by: claude-code_
 
 ---
 
@@ -355,7 +355,15 @@ _Last updated: 2026-06-05 (D-031 선행 게이트 1 — beep concat artifact san
     - **(3) WALK_B session-level recall 정량화:** WALK_B 59세션(60 후보 중 `resampled_count<550` 1 skip), thr0.1 운영선 기준 session recall = `concat_main` 0.644(38/59) vs `continuous_center` 0.492(29/59), **recall_gain = +0.153**. 4분할 both=25 / concat_only=13 / center_only=4 / neither=17(합 59). env/subject 6개 중 5개 concat 우세·동률, center 순이득 환경 0개(이득이 한 subject에 쏠리지 않음).
   - **선행 게이트 1 유보 (닫힌 결정과 분리해 기록):** (a) 보조 후보 `continuous_fall_post`(orig[200:500])가 raw recall 0.797로 더 높으나 **fall-only 데이터라 FAR 불명 + post-fall 의존 위험** → Gate 1 번복 근거 아님. 닫힌 것은 `concat_main` vs `continuous_center`이고 `continuous_fall_post`는 기각이 아니라 열어둔 탐색 항목. (b) `concat_main` 절대 recall 0.644는 목표 0.85 미달 — 좌표계는 토대이지 목표 달성이 아님(모델/Q-onset/증강 별도 과제). (c) E4_S01은 두 crop 다 2/10으로 저조 → 해당 env/subject 신호 품질 별도 점검.
   - **선행 게이트 1 코드 영향/산출물:** 전부 read-only 진단 — 동결 파일(`pipeline.py`/`rpca.py`/`acf.py`/`sdp.py`/학습·추론) 무수정, 신규 스크립트만 `debug/modeling/`에 추가(`gate1_beep_concat_artifact.py`, `gate1b_beep_concat_artifact.py`, `gate1b_walkb_occlusion.py`, `gate1b_walkb_splice_smoothing.py`, `gate1b_walkb_detection_rate.py`). 수치/그림은 `debug/modeling/diag_out/beep_concat_artifact/`(gate1·gate1b·walkb occlusion/smoothing/detection_rate) 하위. 재현·참조용.
-- **Status:** confirmed design / 선행 게이트 1(beep concat artifact sanity) 통과 — clean400_concat 유지 확정 (2026-06-05, read-only) / 구현 및 게이트 2·3 pending
+  - **[Gate 2 detector 기준 확정 / final onset_manifest는 pending] onset detector probe (2026-06-05):** 360 fall 세션(train 230/val 57/test 72 봉인, excluded<550 11) probe로 자동 onset detector 기준 확정. **확정된 것은 detector 기준이며, onset annotation 전체(final onset_manifest)는 needs_review/manual 처리 후 별도 확정.**
+    - **base detector 확정:** search=nominal original[190:350], k_mad=3.0, sustain_frames=5, smooth_frames=5. 근거: nominal k3/s5가 clean valid 최고(251/349=72%), hard% 최저(29%). k3.5/s5는 too_early 줄지만 rise_not_found 증가로 손해. 우선순위(조기오인 최소 > param 안정 > miss 감소).
+    - **broad 격하 = diagnostic only:** broad-only 1.1%, plot 확인상 broad가 stage2 beep tail/search 경계 노이즈를 가짜 onset으로 주입(SIT_B T005 rise=352 노이즈 crossing). nominal rise_not_found는 broad rescue 없이 needs_review/manual로.
+    - **soft threshold set A (10/90 분위수, train+val 확정):** rise_strength<1.136, rise_slope<0.016, confidence_ref<0.522, baseline_noise_ratio>1.206, baseline_mad>0.079, param_sensitivity>51, topk_spread_high(>10) / topk_spread_extreme(>45 보조 로그). soft_warning_count>=2 → needs_review. 3분위수(10/90·15/85·20/80) 비교 후 budget 최소 위해 10/90 채택.
+    - **onset 분포 (provisional):** 자동 rise_frame_clean median ~131(p25 114/p75 157), param 무관 안정(129~137). peak_frame_clean median 182(원본 282 충격점). 명목 onset clean 100보다 ~31프레임 늦음 → 항목 4(onset-aligned crop) 필요성 강화. **131은 provisional — needs_review/manual 처리 후 final onset_manifest의 확정 onset 분포로 re-alignment point 재계산.**
+    - **needs_review 총량 43.6%(set A):** hard 33.4%(바닥, soft로 못 줄임) + soft 증분. 억지로 budget(35%) 맞추면 위험한 자동 onset 통과 → label 품질 우선으로 수용. 비-WALK 24~44%는 대부분 진짜 평탄/노이즈라 검수 정당.
+    - 산출물: `debug/modeling/diag_out/onset_detector/` (onset_probe_manifest_long, session_summary, soft_threshold_compare, plots/plots_soft). read-only, 동결 파일 무수정, train/val만(test 봉인).
+  - **[Gate 2 open] WALK onset baseline contamination — 구조적 미해결:** FALL_WALK는 낙상 전 pre 구간이 걷기라 baseline window original[50:150]이 보행 motion 오염 → threshold 폭등(plot T007 noise 3.06, threshold 0.223) → search 구간 상대적 평탄 → rise_not_found/too_early/weak candidate 증가. WALK_B hard 55.8%, WALK_F hard 42.6% (vs STD_B 12%, SIT_F 22%). soft threshold로 해결 불가. 현재 처리: WALK_B/F review_priority=high + 높은 수동검수 수용. future options(발표 후): ① WALK 전용 baseline window ② WALK onset용 다른 신호 ③ 수동검수 수용(현재 채택). ①②는 detector에 subtype 임의 규칙 주입 위험이라 보류. 근본은 데이터/도메인(걷기↔낙상 신호 분리 난이도) — 게이트 1 WALK_B 최약, 기존 FALL_WALK_B 최약과 일관.
+- **Status:** confirmed design / Gate 1 통과(clean400_concat) + Gate 2 detector 기준 확정(nominal/k3/s5/smooth5, soft set A, broad diagnostic-only). **Gate 2 detector criteria confirmed; final onset_manifest pending needs_review/manual handling.** Pending: needs_review/manual 처리 정책, final onset_manifest, final onset median/re-alignment point, WALK baseline contamination(수동검수 수용), Gate 3 cache builder. 항목 4 정렬점 ~131 provisional.
 
 ---
 
@@ -921,7 +929,7 @@ _Last updated: 2026-06-05 (D-031 선행 게이트 1 — beep concat artifact san
 
 ---
 
-- [ ] event-centered windowing 구현 게이트: **(1) beep 제거 concat artifact sanity — 통과(2026-06-05, [D-031] 선행 게이트 1: clean400_concat 유지 확정. splice-smoothing으로 splice artifact 우려 해소, WALK_B recall_gain +0.153, both=25/concat_only=13/center_only=4/neither=17. read-only 진단, 코드 무수정).** 잔여 — **게이트 2:** (2) onset detector 및 onset/window manifest 생성(`split_id`, `manifest_version`, `decision_scope`, onset/crop/overlap/shift provenance 포함), (3) `needs_review` onset 수동 해결 또는 split 전체 제외 정책 적용, (4) train/val 통계만으로 overlap threshold·shift 폭·confidence 통과 기준 결정 · **게이트 3:** (5) event-centered cache builder 및 train/eval runner에서 baseline-axis와 selected-by-val 결과를 분리 기록. 기존 D-004(300-frame), D-013(104dim), D-018(100Hz resample), D-020(global z-score), D-030(pretrained6 demo primary)와 정합 유지.
+- [ ] event-centered windowing 구현 게이트: **(1) beep 제거 concat artifact sanity — 통과(2026-06-05, [D-031] 선행 게이트 1: clean400_concat 유지 확정. splice-smoothing으로 splice artifact 우려 해소, WALK_B recall_gain +0.153, both=25/concat_only=13/center_only=4/neither=17. read-only 진단, 코드 무수정).** 잔여 — **게이트 2 (detector 기준 확정 2026-06-05, final onset_manifest pending):** (2) onset detector probe로 base 기준 확정(nominal[190:350]/k3/s5/smooth5, broad diagnostic-only, soft set A) — onset_probe_manifest 생성됨, **final onset_manifest는 needs_review(set A 43.6%)/manual 처리 후 별도 확정 pending**, (3) `needs_review` onset 수동 해결 또는 split 전체 제외 정책 — pending, (4) soft threshold set A(10/90) train/val 확정 — overlap threshold·shift 폭·정렬점(~131 provisional, final manifest 후 재계산)은 항목 4·5 정책 후 pending. WALK baseline contamination 미해결(수동검수 수용) · **게이트 3:** (5) event-centered cache builder 및 train/eval runner에서 baseline-axis와 selected-by-val 결과를 분리 기록. 기존 D-004(300-frame), D-013(104dim), D-018(100Hz resample), D-020(global z-score), D-030(pretrained6 demo primary)와 정합 유지.
 
 ## Milestones
 
