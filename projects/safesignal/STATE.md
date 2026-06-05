@@ -1,6 +1,6 @@
 ﻿# SafeSignal Project State
 
-_Last updated: 2026-06-03 (D-020 트랙1/트랙2 per-lag 결과 및 global 유지 결론 반영) | Updated by: codex_
+_Last updated: 2026-06-04 (더미데이터 수령 전 event-centered/beep/RPCA 검증 항목 반영) | Updated by: codex_
 
 ---
 
@@ -334,6 +334,23 @@ _Last updated: 2026-06-03 (D-020 트랙1/트랙2 per-lag 결과 및 global 유�
 - **Content:** 데모 primary는 `running`을 제외한 6-class `pretrained6`(`fall`, `walking`, `sit_stand`, `lying`, `standing`, `picking`)로 확정한다. 7-class `finetune7`은 reference-only로 유지한다. 근거는 (1) Alsaify 사전학습 best.pt가 6-class이며 running 클래스가 공개 source에 없고, (2) 2026-06-02 CPU 30epoch within-subject 비교에서 6-class가 7-class보다 fall recall/F1이 높았으며, (3) 7-class run에서 `running→fall`이 false-positive share 약 0.244로 최대 FAR 기여원이었다는 점이다.
 - **Ref:** `docs/CODEX_HANDOFF_2026-06-02.md` (commit `237c93f`, "Key Decisions" 및 6-class vs 7-class 표), `model/finetune/train.py` commit `0b25a49` (`--class_policy pretrained6`, 6-class strict load 경로), `debug/modeling/derive_pretrained6_cache.py` commit `9e3064d`.
 - **Status:** confirmed (demo primary; [D-019] cross-subject 정식 학술 평가는 별도 유지)
+### [D-031] event-centered windowing 설계 7개 항목 확정
+- **Date:** 2026-06-05
+- **Decided by:** user / claude-ai / codex review
+- **Content:**
+  - **Scope:** D-020 per-lag ablation 기각 및 step2 후처리 sweep 한계 확인 이후, post-fall 정적 단서 의존을 줄이고 transient supervision을 강화하기 위한 event-centered windowing/labeling 트랙을 설계로 확정했다. 본 결정은 구현 전 설계 결정이며, 실제 코드/성능 판단은 현재 `wifi-csi-fall-detection` 저장소 기준으로 검증한다.
+  - **Q-좌표계:** 자체수집 fall 세션은 100Hz 리샘플 후 `resampled_count` 기준으로 정규화한다. `resampled_count < 550` 세션은 제외하고, `>= 550`은 `[:550]`로 절단한 뒤 Stage beep 구간 `[0:50]`, `[150:200]`, `[400:450]`을 제거해 clean400을 만든다. clean400은 `original[50:150] + original[200:400] + original[450:550]`이며, clean 좌표계는 `pre[0:100] + fall[100:300] + post[300:400]`, 명목 onset은 clean frame 100이다. raw CSV 행 수 기준 필터링은 금지한다. 폐기된 더미 데이터의 onset=160 및 명목 original 200 값은 변환 기준점으로 쓰지 않고, 우리 자체수집 기준으로 새 onset metadata를 생성한다.
+  - **Q-onset:** onset은 자동 후보 생성 + 선택적 수동 검수 방식으로 확정한다. 1차 자동 신호는 full-session RPCA sparse frame energy의 sustained rise-onset이며, peak 자체나 절대 peak height threshold를 onset/fall 판별 기준으로 쓰지 않는다. 기본 방향은 clean400 frame energy 5-frame smoothing, baseline clean[0:80~100] median/MAD, 탐색 clean[60:220], `baseline_median + k*MAD` 초과가 M frame 지속되는 첫 지점이다. CUSUM/change-point는 2차 후보로만 사용한다. 저장 필드는 `onset_frame_clean`, `onset_frame_original`, `peak_frame_clean`, `source`(`auto_reviewed`/`manual`/`manual_corrected`), `confidence`, 원시 confidence 구성요소(`rise_strength`, `rise_slope`, `peak_distance`, `topk_spread`, `baseline_noise`), `needs_review`, `notes`로 한다. `needs_review` 조건은 rise 범위 밖, peak가 clean[100:300] 밖, confidence 낮음, top-k 흩어짐, rise_strength 낮음, baseline noise 높음, `resampled_count < 550`, 약점 subtype(FALL_WALK_B 등), clean frame 60 미만의 walking-pre 오인 후보를 포함한다. 통과 confidence threshold는 train/val 분포로만 결정한다.
+  - **Q-평가:** primary는 event-level 세션 단위로 고정한다. 기존 `debug/modeling/diag_event_sweep.py` 정의를 유지해 fall 세션은 session fire 시 TP, 아니면 FN, non-fall 세션은 1회 이상 fire 시 FP=1, 다중 fire도 세션당 1로 계산한다. `event_FAR = FP / nonfall_sessions`이며 fire 위치는 primary pass/fail에 반영하지 않는다. 비교는 두 층으로 분리한다: baseline-axis는 `threshold_min=0.1`, `N=2`, `margin=on_m0.2`, `stride=50`, `tail_window=False`를 고정해 모델만 비교하고 STATE의 event_recall 0.6528/FAR 0.1111과 직접 대조한다. operating-point는 STATE 60-config grid를 val split에서 재-sweep하고 sealed test에는 `selected_by_val`과 `baseline_fixed_config`를 각 1회만 적용한다. cooldown은 track B 실시간 추론 설계로 이관한다. 보조 지표로 forward/tail window 진단과 timely-detection/latency(`time_origin=onset_frame_clean`, `fire_time_frame=N번째 positive window end_frame`, `latency_s`, `early_fire`, `timely_3s`, `timely_4s`, `late_tp`, first-fire latency median/p90)를 기록하되 primary pass/fail과 섞지 않는다.
+  - **Q1 윈도우 정렬:** 모델 입력 window size는 D-004와 동일하게 300 frame으로 유지한다. 정렬 ablation은 fixed `clean[50:350]`과 onset 기준 `[onset-50:onset+250]`을 비교한다. post 분량은 적음/많음 ablation으로 마지막에 확인한다. multi-window shift는 단일 crop 이득 확인 전에는 넣지 않는다.
+  - **Q2 라벨 재정의:** post-only window 처리 방식은 A) fall에서 제외, B) 기존 `lying` 클래스로 전환을 ablation한다. transient 포함 판정은 window와 fall interval 겹침 비율의 빡빡/느슨 두 수준을 비교하되, 구체 %는 onset/window manifest의 train/val 겹침 분포를 보고 결정한다. 임의 50% 같은 근거 없는 수치는 사용하지 않는다. 6-class pretrained6 정책을 유지하며, post-only→lying은 기존 class를 재사용하므로 head 구조와 best.pt strict load에 영향을 주지 않는다.
+  - **Q3 비낙상 처리:** event-centered 변경은 fall window 정의에만 적용하고 non-fall 세션은 기존 sliding window 정책을 유지한다. non-fall window 수를 물리적으로 제한하지 않고 sampler로만 균형을 잡는다. 기존 WeightedRandomSampler의 source-ratio 정규화와 SafeSignal hard non-fall class weight 구조를 사용한다. post-only→lying 선택 시 lying weight를 선제 조정하지 않고, class별 raw count와 effective sampled mass(`sum(weights[y==class & source==safesignal])`)를 run report에 남긴다. source_ratio는 baseline-axis ablation에서 0.60/0.40으로 유지하고, source_ratio sweep은 operating optimization으로 분리한다.
+  - **Q4 윈도우 수 확보:** multi-window는 조건부 보조 수단으로만 둔다. 발동 신호는 train fall window 수가 baseline의 50~60% 미만, effective fall mass 과소, 단일 crop이 `late_tp`는 줄였지만 recall이 부족한 경우를 함께 본다. 단일 crop이 recall/FAR/late_tp를 모두 개선하면 fall count가 줄어도 shift는 보류한다. shift 폭은 onset/window manifest의 train/val 분포로 결정한다. multi-window 사용 시 class별 raw count/effective sampled mass, session별 window count/mass p50/p90/max, fall session당 shift 수 분포를 추가 로깅하고, session over-representation이 실제 확인될 때만 session-normalized weighting을 검토한다.
+  - **실험 순서:** ① Q1 정렬 비교(기본값: post-only 제외, overlap 느슨, post 적음) → ② Q2 post-only 처리 비교 → ③ Q2 overlap 빡빡/느슨 비교 → ④ Q1 post 분량 비교. 고정값 오염 방지를 위해 정렬 승자가 onset이면 post-only 승자 설정에서 fixed 정렬을 1회 재확인하고, post-only 승자가 제외이면 overlap 승자 설정에서 lying 전환을 1회 재확인한다. 효과 차이가 작거나 부호가 흔들리면 `alignment × post_only` 2x2 추가 확인을 허용한다.
+  - **교차 점검 / 선행 게이트:** 구현 전 `beep concat artifact sanity`를 수행한다. clean400 좌표계는 유지하되, beep 제거 concat이 RPCA/ACF/SDP 접합부 artifact를 크게 만들면 원본 continuous crop/peak-centered crop 우선 여부를 재논의한다. onset 기준 arm은 `needs_review`가 해결된 onset만 사용한다. 미해결 세션은 원칙적으로 수동 해결 후 사용하고, 제외가 불가피하면 train/val/test 전체에서 제외 수를 보고한다. onset/window manifest는 전체 파일 metadata로 생성 가능하나, overlap threshold/shift 폭/needs_review confidence threshold 결정은 split-scoped train/val 통계로만 수행하고 test는 봉인한다.
+  - **Implementation inputs:** 다음 구현 순서는 onset detector → onset/window manifest 생성기 → event-centered cache builder → `train.py` 분기/runner → ablation execution/report 순서로 둔다. cache lineage에는 `manifest_id`, `align`, `post_policy`, `overlap_policy`, `label_policy`, `post_amount`, `class_policy`를 포함한다.
+- **Status:** confirmed design / implementation pending
+
 ---
 
 ## Implementation Status
@@ -381,6 +398,15 @@ _Last updated: 2026-06-03 (D-020 트랙1/트랙2 per-lag 결과 및 global 유�
 
 ## Review Notes
 
+### 2026-06-04 — 더미데이터 수령 전 event-centered / beep timing / RPCA 조건 정리 (Codex)
+
+- **목적:** 팀원 더미데이터를 받은 뒤 바로 검증·학습 판단을 이어갈 수 있도록, 현재까지 확인된 운영점/전처리/시간축 이슈와 필수 preflight를 정리한다. 실제 코드 판단의 진실 공급원은 `wifi-csi-fall-detection` repo이며, 이 항목은 진행 상태 기록이다.
+- **Run A / threshold 상태:** fw1.5 Run A는 `best_operating` selector가 threshold=0.20을 골라 s43 recall 0.736/FAR 0.094/F1 0.721로 보였지만, split 재현 assert 통과 후 고정 threshold sweep에서 s43 `fw1.5 @ thr0.05`는 recall 0.799/FAR 0.144/F1 0.706으로 baseline s43(0.778/0.150/0.687)을 모두 개선했다. 단 이는 sealed test sweep에서 운영점을 고른 결과라 test-set tuning caveat가 있으며, 발표용 공식 수치로 쓰려면 threshold를 사전에 고정한 3-seed 재현이 필요하다. 이후 사용자/Claude 보고상 thr0.05는 3-seed 평균 FAR이 0.169로 FAR≤0.15 조건을 넘겼고, thr0.10/0.15 fixed fallback 평가가 후속 과제로 잡혔다(STATE 작성 시점 Codex가 산출물 직접 검증하지 않음).
+- **증강 위치 / RPCA 조건:** 현재 train 증강은 전처리·cache 생성 단계가 아니라 `TrainAugmentDataset` 계열의 train-time/on-the-fly tensor augmentation이다. CSV→resample/window/RPCA/ACF/SDP/z-score→cache 이후 train subset에만 적용되는 구조로 이해해야 한다. 반면 RPCA max_iter=30/200은 전처리 조건이다. 기존 정식 raw SDP/no-motion/track1 계열은 RPCA max_iter=200 기준으로 기록되어 있으므로, 팀원 더미데이터 결과가 RPCA 30회 제한으로 나온 경우에는 “더미데이터 효과”와 “전처리 조건 변경 효과”가 섞인다. 공식 비교 전에는 RPCA 200 재현 또는 RPCA 30을 새 파이프라인 조건으로 명시하고 train/val/test/realtime 모두 같은 조건으로 맞춰야 한다.
+- **4초 프로토콜과 실제 5.5초 녹화:** `collect/labels.py`의 fall stage는 pre 1s + fall 2s + post 1s지만, `collect_main.py`/`server/collect_manager.py`는 recording 시작 후 각 stage마다 `beep_stage()` 0.5s blocking을 실행한 뒤 sleep한다. ready beep/countdown은 녹화 전, end beep은 녹화 후다. 따라서 정상 fall CSV는 대략 5.5초이며 타임라인은 stage1 beep 0.0~0.5s, pre 0.5~1.5s, stage2 beep 1.5~2.0s, fall sleep 2.0~4.0s, stage3 beep 4.0~4.5s, post 4.5~5.5s다. 기존 `FALL_RANGE_S=(1.0,3.0)`/frame 100~300 가정은 beep 포함 실측 시간축과 어긋난다. 실제 event-centered 후보 구간은 frame 150~400(stage2 beep 시작~fall sleep 끝), frame 200~400(fall sleep only), 또는 불확실성 흡수를 위한 frame 150~450 broad search로 재검토해야 한다.
+- **beep 제거 가능성과 리스크:** resample 후 정상 550±5 frame 세션에 대해 `[0:50]`, `[150:200]`, `[400:450]`을 제거하면 400 frame(pre 100/fall 200/post 100)으로 복원할 수 있다. 그러나 제거 후 concat은 시간 연속성을 끊기 때문에 RPCA→ACF→SDP에서 접합부 artifact가 생길 수 있다. event-centered 구현 전에 read-only 진단으로 원본 continuous crop(예: 150:450/200:500)과 beep-removed concat(400 frame에서 50:350 등)의 SDP cosine/mean abs diff/energy curve corr/peak 위치/모델 확률을 비교해야 한다. 접합 artifact가 크면 concat 대신 원본 continuous window crop 또는 peak-centered crop을 우선한다.
+- **더미데이터 수령 후 preflight:** 팀원 더미데이터가 “4초”라고 해도 처리 방식은 생성 경로에 따라 다르다. (1) 5.5초 beep 포함 원본을 4초로 압축했다면 beep도 압축되어 고정 1.5초 제거는 잘못이다. (2) beep 제거 후 clean 4초를 변형했다면 더미는 그대로 쓰고 실측만 clean 4초로 맞추는 것이 맞다. (3) 실제 파일이 5초대라면 실측과 같은 처리 후보가 필요하다. 수령 즉시 frame count 분포(~400/~550/가변), timestamp/duration, 원본-더미 origin 매핑, beep/low-motion 흔적, RPCA max_iter, split leakage 여부(원본과 파생 더미가 train/test로 갈라지지 않도록 group split)를 확인한다.
+- **다음 실행 순서 제안:** ① 실측 5.5초 데이터에서 beep 제거 concat ACF/SDP artifact 진단(read-only), ② 더미데이터 파일 수령 후 시간 구조/RPCA/split leakage preflight, ③ 양쪽 시간 구조를 동일 기준으로 맞춘 cache builder 설계, ④ session/origin 단위 split을 먼저 고정한 뒤 peak-centered single/multi-window를 생성한다. 더미 또는 multi-window를 만든 뒤 파일 단위 random split을 하면 leakage 위험이 크므로 금지한다.
 ### 2026-06-03 — D-020 per-lag 트랙2/트랙1 결과 및 최종 정규화 선택 (Codex)
 
 - **검증 입력:** `debug/modeling/diag_out/track2_probe_comparison.json`, `track2_probe_cache_summary.json`, `track1_formal_comparison.json`, `track1_formal_cache_summary.json`을 직접 확인했다. worktree에는 로컬 실행 스크립트 `debug/modeling/track1_formal_make_caches.py`, `track1_formal_analyze.py`, `track2_probe_make_caches.py`, `track2_probe_analyze.py` 4개가 untracked이며, main 커밋 이력은 2026-05-29 이후 `721718e`→`79a8f20`까지 기존 정리와 동일하다.
@@ -858,6 +884,8 @@ _Last updated: 2026-06-03 (D-020 트랙1/트랙2 per-lag 결과 및 global 유�
 - [ ] fine-tuning 후속 구현: ~~SafeSignal CSV→raw window cache builder~~ (finetune7/global cache 및 D-020 raw SDP cache 생성 완료), Alsaify fine-tuning cache builder/정식 raw SDP cache 운용 검증, ~~TrainAugmentDataset 실제 증강 연결~~ (2026-06-01 완료 — b안 on-the-fly, `(seed,idx,epoch)` 결정론적, Alsaify pass-through, `verify_aug_gate.py` 검증. main `0b25a49`/`9e3064d`), 최종 eval/report 확장, 3-fold pooled global threshold selector 및 mean pass/fail 집계, full unfreeze + warmup 정책 반영 확인 (2026-05-20 골격 구현, 2026-06-01 main 반영)
 - [x] SDP z-score 후속(D-020): per-lag는 train-split-stat이 아니라 per-window self-normalization으로 probe/ablation했다(axis=2, std_floor=1e-4, eps=1e-6, clip=±3). SafeSignal raw SDP cache와 Alsaify raw SDP cache를 확인한 뒤 트랙2 `PROVISIONAL mixed-normalization probe`와 트랙1 정식 ablation(Alsaify+SafeSignal 모두 동일 정규화)을 2026-06-03 완료했다. 정식 트랙1 결과는 A(global) R=0.738±0.038/FAR=0.144±0.031/F1=0.671±0.019, B(per-lag) R=0.708±0.055/FAR=0.159±0.043/F1=0.637±0.014로 B안 net negative. 최종 정규화는 global z-score 유지, per-lag 기각. step3-a(tail down-weight/제외)는 forward/tail 진단상 tail-only rescue 31~32세션으로 recall 파괴 위험이 커 후보에서 제외. ([D-020] 후속. A안 구현 자체는 main `14bfb12`로 2026-05-17 완료)
 - [ ] event-centered windowing/labeling 탐색: D-020 per-lag가 기각되고 step2 후처리 sweep도 recall 0.85/FAR 0.15 동시 달성에 실패했으므로, post-fall 정적 단서 의존을 줄이고 transient supervision을 강화하는 window/label 설계를 다음 후보로 검토한다. 아직 결정·구현·실험된 항목은 아니며, 2026-06-11 발표 전 우선순위와 실험 범위 확정 필요.
+- [ ] beep 제거 후보 검증: 5.5초 fall 세션에서 stage beep frame `[0:50]`, `[150:200]`, `[400:450]` 제거 후 concat한 400-frame 시퀀스가 RPCA→ACF→SDP에서 접합부 artifact를 만들지 않는지 원본 continuous crop과 비교한다. artifact가 크면 beep concat 제거 대신 원본 continuous event crop/peak-centered crop을 우선한다.
+- [ ] 더미데이터 수령 후 preflight: frame count/duration 분포, 4초 생성 경로(beep 제거 후 변형인지 5.5초 압축인지), RPCA max_iter(30 vs 200), origin/session 매핑, train/test leakage 여부를 확인한다. 더미가 4초라는 이유만으로 1.5초 beep 제거를 추가 적용하지 않는다.
 - [x] ACF lag=1..20 기준으로 Alsaify 사전학습 캐시 재생성 및 `best.pt` 재학습 (`_lag1_20` 캐시 사용) (2026-05-18 완료. `dataset_cache_e12_w300_s300_lag1_20_tail_ps.npz` 기반 30epoch 재학습 — best=epoch7: fall_recall=0.922 / fall_f1=0.902 / FAR=0.029 / acc=0.791, meets_all_targets=true. lag0 포함 버전(recall=0.919/f1=0.913/FAR=0.022/acc=0.810) 대비 recall +0.003, f1 -0.011, FAR +0.007, acc -0.019 — 거의 동등. D-011 stretch(recall≥0.90) 충족)
 - [x] Google Drive 자동 업로드용 rclone 설치/설정 절차 확인 (2026-05-22: 수집 노트북 Bash 기준 `SAFESIGNAL_RCLONE_BIN`, `SAFESIGNAL_DRIVE_UPLOAD=1`, `SAFESIGNAL_DRIVE_REMOTE=gdrive:SafeSignal_Dataset`로 Drive 업로드 확인. 팀원 PC는 rclone remote 이름/실행 경로만 별도 확인)
 - [x] E2E 실시간 추론 단계에서 `server/inference/buffer.py`를 timestamp-aware 100Hz resampling buffer로 전환 (코드상 `_resample_uniform()` + `np.interp`, Rx1 timestamp 기준 grid timestamp 보존 확인. 단 max_gap_ms hard skip/warn 정책은 아직 report/정책 후속)
@@ -886,6 +914,8 @@ _Last updated: 2026-06-03 (D-020 트랙1/트랙2 per-lag 결과 및 global 유�
 - [ ] 실시간 추론에 z-score 전 SDP energy metadata 노출 (FALSE_POSITIVE_NOTES §7.10 후속, no_motion gate 사전작업): `window_to_model_input()`(model/preprocessing/pipeline.py)에 z-score 전 SDP를 옵션 반환하도록 확장 → `FallPredictor.predict()`(server/inference/predictor.py)가 sdp energy를 result dict에 포함 → `worker._inference_process`(server/inference/worker.py) result 통과 → `server/main.py` gate 판정에서 사용. buffer(server/inference/buffer.py)에는 gap/pair_dt quality metadata 보존 추가. fall 데이터 energy p5 확인 전 hard skip 금지(D-025/노트 §8.5).
 
 ---
+
+- [ ] event-centered windowing 구현 게이트: (1) beep 제거 concat artifact sanity를 RPCA→ACF→SDP 기준으로 확인, (2) onset detector 및 onset/window manifest 생성(`split_id`, `manifest_version`, `decision_scope`, onset/crop/overlap/shift provenance 포함), (3) `needs_review` onset 수동 해결 또는 split 전체 제외 정책 적용, (4) train/val 통계만으로 overlap threshold·shift 폭·confidence 통과 기준 결정, (5) event-centered cache builder 및 train/eval runner에서 baseline-axis와 selected-by-val 결과를 분리 기록. 기존 D-004(300-frame), D-013(104dim), D-018(100Hz resample), D-020(global z-score), D-030(pretrained6 demo primary)와 정합 유지.
 
 ## Milestones
 
@@ -932,6 +962,8 @@ _Last updated: 2026-06-03 (D-020 트랙1/트랙2 per-lag 결과 및 global 유�
   - 현재 raw 수집 데이터가 적으므로 E4/E1 데이터를 threshold 전용 validation/test로 크게 분리하지 않는다. 가능한 raw 데이터는 학습/평가 후보로 보존하고, 증강은 train split에만 적용한다.
   - 시연 후보 환경에서 시간이 남으면 낙상 동작을 각 유형별로 추가 10회 수집하는 방안을 검토한다. 이 추가 수집분은 모델 재학습 또는 demo threshold sanity check에 활용할 수 있다.
 - 다음 액션: E4 본수집 완료 후 NO_MOTION 수집 전 시간 여유를 확인하고, 추가 낙상 수집 여부를 결정한다.
+
+
 
 
 
