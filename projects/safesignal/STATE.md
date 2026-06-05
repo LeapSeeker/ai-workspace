@@ -1,6 +1,6 @@
 ﻿# SafeSignal Project State
 
-_Last updated: 2026-06-05 (D-031 Gate 1·2 확정 + onset_manifest v1_auto_reviewed 생성: auto_reviewed 214 usable/pending_manual 135 — v1은 clean subset, final onset_manifest는 진규 검수 후 v2) | Updated by: claude-code_
+_Last updated: 2026-06-06 (onset 검수 도구 v2 — 인터랙티브 곡선 차트 구현/푸시 `d79e26c`, 진규 시각검수 완료; D-031 Gate 1·2 확정 + onset_manifest v1_auto_reviewed: auto_reviewed 214 usable/pending_manual 135 — v1은 clean subset, final onset_manifest는 진규 검수 후 v2) | Updated by: claude-code_
 
 ---
 
@@ -370,6 +370,7 @@ _Last updated: 2026-06-05 (D-031 Gate 1·2 확정 + onset_manifest v1_auto_revie
     - **항목 4 영향:** auto_reviewed 214로 항목 4 crop alignment provisional 착수 가능. 단 WALK 과소대표로 깨끗한 비-WALK 과대표 → onset-aligned 효과가 실제보다 좋게 보일 위험. 항목 4는 (a) 전체/subtype별 분리 평가 (b) WALK는 v2 후 재평가 단서 필수.
     - **priority high pending_manual:** 115(train/val 98, WALK 62/115=54%). 진규 직접 검수 진행. 산출물: priority_review_queue.csv(정렬·reason·top-k·추천, 전 추천에 "Recommendation only, 진규 승인 필요" 명시, pending onset 전부 null) + plots_priority/(98).
     - 산출물: `debug/modeling/diag_out/onset_detector/finalization/` (manifest_v1_auto_reviewed.csv, summary, priority_review_queue.csv, plots_priority/). read-only, train/val 기준(test 봉인), 동결 파일 무수정. **Claude Code는 pending_manual onset 미확정 — 진규 검수 후 v2.**
+  - **[검수 도구 v2 — 인터랙티브 곡선 차트 (2026-06-06, push `d79e26c`)]:** PNG 고정 이미지 → JS canvas 인터랙티브 차트로 재구현(검수자 피드백). sparse-energy 곡선이 디스크에 없어(manifest_v1 실행 중 메모리에서만 렌더 후 소멸) `export_energy_curves.py`(= `gate2_onset_manifest_v1.recompute_energy` 동일 계산: load→resample→rpca_sparse→mean|·|→5smooth)로 98세션 재계산→`energy_curves.json`(478KB, 98/98) 빌드시 임베드. 반영 6개: ① x축 눈금 3단계(1/10/100) ② hover frame·energy 툴팁 + 클릭→수정입력 ③ 수정 모달 실시간 '내 선택' 초록 세로선 ④ 색약 접근성(구간 빗금패턴+글자라벨, 파랑/주황/초록 팔레트, strip 색+글자) ⑤ 에너지 곡선 강조(굵은 파랑)·thr/auto 보조(흐림) ⑥ rise_not_found 안내 + SEARCH 밖 onset 지정 허용(경고만). 기존 기능·Export(csv/json) 스키마·localStorage `_v1` 유지. read-only(데이터·plot png·동결파일·manifest 무수정, 도구 HTML+신규 파생물만). 곡선은 HTML 임베드라 file:// 더블클릭으로 표시(서버 불필요). **진규 시각검수 완료 — 6개 요구사항 반영 확인.** 검수 판정 자체는 진규가 도구로 진행 → `review_decisions.csv` Export → v2 manifest.
 - **Status:** confirmed design / Gate 1·2 detector 기준 확정 + onset_manifest **v1_auto_reviewed** 생성(clean subset: auto_reviewed 214 usable / pending_manual 135 / excluded 11). **detector criteria confirmed; v1은 clean subset이며 final onset_manifest 아님 — pending_manual 135(WALK 68)은 진규 검수 후 v2에서 확정, provisional onset median 132.5(~131)도 v2 재계산.** Pending: pending_manual 수동 검수(priority queue 115, train/val 98), final onset_manifest(v2), final onset median/re-alignment point, WALK baseline contamination(수동검수 수용), 항목 4 crop alignment(auto_reviewed로 provisional 착수 가능·WALK 편향 주의), Gate 3 cache builder.
 
 ---
@@ -414,6 +415,7 @@ _Last updated: 2026-06-05 (D-031 Gate 1·2 확정 + onset_manifest v1_auto_revie
 | preprocessing/acf.py lag 정책 (lag0 제외, lag=1..20) | done | main `49f92be` | 2026-05-18 |
 | collect/drive_upload.py (rclone 기반 Google Drive 자동 업로드) | done (운영 확인: `gdrive:SafeSignal_Dataset`, `E*/S*` 자동 분류) | main | 2026-05-22 |
 | debug/preprocessing/analyze_sdp_energy.py (정식 pipeline 기준 z-score 전 SDP energy 분석) | done (분석 전용, 추론 코드 무변경) | codex/no-motion-baseline | 2026-05-25 |
+| debug/modeling/build_onset_review_tool.py + export_energy_curves.py (onset 검수 도구 v2 — 인터랙티브 곡선 차트) | done (read-only; 곡선 임베드 98/98, 검수자 피드백 6개 반영, 진규 시각검수 완료) | feature/event-centered-gate1 `d79e26c` | 2026-06-06 |
 
 ---
 
