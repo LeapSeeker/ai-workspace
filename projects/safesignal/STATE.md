@@ -408,6 +408,20 @@ _Last updated: 2026-06-06 (진규 onset 수동검수 115개 완료 → `manifest
   - **산출물:** Gate3 cache(fixed/onset_primary/onset_reduced) + crop_index, item4 학습 cache·eval_windows.pkl, ckpt(checkpoints_item4 / _reg, best_operating·best_val_loss ×15 seed, 로컬), item4_eval_report.md/json. 스크립트(build_gate3_cache/item4_build_policy_cache/item4_train/item4_precompute_eval_windows/item4_event_eval) 추적. read-only(원본·동결파일·manifest 무수정). 학습 seed 42–46 고정 재현 가능.
 - **Status:** confirmed — onset 정렬 가치(FAR 억제) 검증. 절대 목표 미달(병목=capacity), 후속 multi-window 후보.
 
+### [D-031 추가] 더미 직접생성 + 4-arm 증강 학습 결과 (within-subject in-domain)
+- **Date:** 2026-06-06
+- **Decided by:** user / codex / claude-ai
+- **Content:**
+  - **더미 생성:** 팀원 6/7.py 로직을 clean400 좌표로 이식(난수 factor/scale/crop_offset/snr 전부 lineage 저장 — 팀원 원본은 미저장이라 onset 역산 불가했음). slow는 onset 추적 약점(delta median 17 vs normal 5.5/fast 9.0)이라 onset-aligned에서 제외. 2차 normal+fast ×6 → onset 교차검증(expected 해석 vs detected Gate2) 통과 **use 301**(delta median2/p90 6, splice 새 artifact 1%, baseline_noise 감소).
+  - **이중 증강 발견·수정:** train.py 온라인 증강(jitter/scale/timewarp/noise)이 더미에도 적용돼 이중 증강 → **더미만 온라인 증강 skip**(filename 마커), 원본 유지. (없었으면 C/D 무효였음.)
+  - **4-arm(A fixed_orig / B onset_orig / C fixed_aug / D onset_aug) ×5seed, sealed test non-WALK paired N=27:**
+    - 비통제: **B→D ΔFAR +0.110 [+0.070,+0.151] 유의(FAR 악화)**, Δrecall +0.008 ns. 단 더미가 fall만 늘려 class 불균형(fall:non 0.078→0.259, fall mass 2.9배).
+    - **(B) class-ratio 통제(fall effective mass 원본 고정)**: **B→D ΔFAR +0.028 [−0.014,+0.071] 유의차 미검출**, 결합 (D−C)−(B−A) +0.118→+0.026(ns), Δrecall −0.044 ns. → **FAR 악화는 class 불균형 artifact 확정. 통제 후 더미 효과 = null(중립).**
+  - **결론:** 현재 **in-domain offline 더미(fall만)는 onset-aligned 성능을 강화하지 못함(중립, N=27 under-powered).** 개선하려면 **비낙상 포함 균형 증강** 또는 multi-window/신규 세션. 결론 범위 = within-subject in-domain (새 subject/env 일반화 아님).
+  - **핸드오프:** HANDOFF.md(repo root) — 산출물 분류(git 경량 / Drive 대용량 수동 / 제외), 이어받기 절차. Drive 자동업로드 불가(MCP payload + 보안 classifier 차단) → 사용자 수동.
+  - **산출물:** 스크립트(dummy_clean400_lib/dummy_generate/dummy_validate, item4_build_arm_caches/item4_arms_eval), out2/lineage.csv, arms_results(_ctrl) report/json, item4_cache_*_aug.npz(로컬), ckpt checkpoints_item4_arms(_ctrl)(로컬·재학습 가능). read-only(원본·동결·manifest 무수정).
+- **Status:** confirmed — 더미 효과 null(중립). FAR 악화는 class artifact. 후속=균형 증강.
+
 ---
 
 ## Implementation Status
