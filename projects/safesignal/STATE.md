@@ -395,6 +395,19 @@ _Last updated: 2026-06-06 (진규 onset 수동검수 115개 완료 → `manifest
 - **Status:** confirmed
 - **Status:** Gate 1·2 완료, onset_manifest v2 확정(검수 115개 반영). 항목4 alignment 설계 확정 → Gate 3 cache builder 진행 예정. Pending: cache builder(fixed/onset_primary/onset_reduced), 항목4 paired 비교(non-WALK pooled 메인), event-level 평가.
 
+### [D-031 추가] 항목4 학습/평가 최종 결과 (onset 정렬 검증)
+- **Date:** 2026-06-06
+- **Decided by:** user / codex / claude-ai
+- **Content:**
+  - **onset 정렬 검증:** sealed test(non-WALK pooled paired, N=27)에서 onset_primary는 fixed와 **동일 recall**(Δ−0.015, 비유의)에 **FAR 유의 감소**(Δ−0.139 [95%CI −0.191, −0.091]). McNemar p=0.727. → onset 정렬의 가치 = "같은 recall에서 FAR 유의 감소(오발화 억제)"로 검증.
+  - **운영점(val recall–FAR frontier, onset_primary, 정규화):** FAR≤0.15 → recall 0.77 / recall 85% → FAR ~0.20 / max-F1 0.71(recall 0.89 / FAR 0.22). onset_primary가 운영곡선 전 구간에서 fixed 우위(FAR≤0.15: 0.767 vs 0.665).
+  - **목표 대비:** recall≥85% AND FAR≤15% **동시 미달**(recall 85%는 FAR ~20%에서 달성). F1≥0.85는 event-level 구조상(비낙상:낙상=180:27) 도달 불가(최대 ~0.72).
+  - **최적화 레버 결과:** 정규화(weight_decay 1e-4, early-stop↑)로 과적합 완화 → frontier +0.02~0.03. threshold grid 확장(0.30→0.70)·N{1,2,3}·margin{..0.3} 등 post-processing은 **무변화(한계 도달)**. 체크포인트 선택(best_operating vs best_val_loss) 민감도 ~0.05.
+  - **post_amount ablation:** onset_primary(post250) > onset_reduced(post200) — FAR/F1 모두 primary 우위. fixed_baseline 모드: onset은 자기 threshold 필요(고정 적용 시 recall도 유의 감소) → threshold 최적화와 alignment 효과 분리 확인.
+  - **병목 = 모델/데이터 capacity.** post-processing·정규화는 한계까지 소진. ROI 최고 후속 레버 = **multi-window**(onset 주변 다중 crop): onset_primary는 train fall 114개(fixed 223의 절반)인데도 이김 → 데이터 늘리면 frontier 상향 여지(단 D-031 단일 crop 우선 원칙으로 현재 보류).
+  - **산출물:** Gate3 cache(fixed/onset_primary/onset_reduced) + crop_index, item4 학습 cache·eval_windows.pkl, ckpt(checkpoints_item4 / _reg, best_operating·best_val_loss ×15 seed, 로컬), item4_eval_report.md/json. 스크립트(build_gate3_cache/item4_build_policy_cache/item4_train/item4_precompute_eval_windows/item4_event_eval) 추적. read-only(원본·동결파일·manifest 무수정). 학습 seed 42–46 고정 재현 가능.
+- **Status:** confirmed — onset 정렬 가치(FAR 억제) 검증. 절대 목표 미달(병목=capacity), 후속 multi-window 후보.
+
 ---
 
 ## Implementation Status
