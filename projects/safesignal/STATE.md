@@ -1,6 +1,6 @@
 ﻿# SafeSignal Project State
 
-_Last updated: 2026-06-06 (onset 검수 도구 v2 — 인터랙티브 곡선 차트 구현/푸시 `d79e26c`, 진규 시각검수 완료; D-031 Gate 1·2 확정 + onset_manifest v1_auto_reviewed: auto_reviewed 214 usable/pending_manual 135 — v1은 clean subset, final onset_manifest는 진규 검수 후 v2) | Updated by: claude-code_
+_Last updated: 2026-06-06 (진규 onset 수동검수 115개 완료 → `manifest_v2_manual_augmented` 확정: usable_for_fixed 349/360, usable_for_onset_aligned 264/360, onset_status auto 214/manual 50/onset_unusable 65/pending 20/data_invalid 11; 항목4 alignment 설계 확정 → Gate 3 cache builder 진행 예정) | Updated by: claude-code_
 
 ---
 
@@ -371,7 +371,29 @@ _Last updated: 2026-06-06 (onset 검수 도구 v2 — 인터랙티브 곡선 차
     - **priority high pending_manual:** 115(train/val 98, WALK 62/115=54%). 진규 직접 검수 진행. 산출물: priority_review_queue.csv(정렬·reason·top-k·추천, 전 추천에 "Recommendation only, 진규 승인 필요" 명시, pending onset 전부 null) + plots_priority/(98).
     - 산출물: `debug/modeling/diag_out/onset_detector/finalization/` (manifest_v1_auto_reviewed.csv, summary, priority_review_queue.csv, plots_priority/). read-only, train/val 기준(test 봉인), 동결 파일 무수정. **Claude Code는 pending_manual onset 미확정 — 진규 검수 후 v2.**
   - **[검수 도구 v2 — 인터랙티브 곡선 차트 (2026-06-06, push `d79e26c`)]:** PNG 고정 이미지 → JS canvas 인터랙티브 차트로 재구현(검수자 피드백). sparse-energy 곡선이 디스크에 없어(manifest_v1 실행 중 메모리에서만 렌더 후 소멸) `export_energy_curves.py`(= `gate2_onset_manifest_v1.recompute_energy` 동일 계산: load→resample→rpca_sparse→mean|·|→5smooth)로 98세션 재계산→`energy_curves.json`(478KB, 98/98) 빌드시 임베드. 반영 6개: ① x축 눈금 3단계(1/10/100) ② hover frame·energy 툴팁 + 클릭→수정입력 ③ 수정 모달 실시간 '내 선택' 초록 세로선 ④ 색약 접근성(구간 빗금패턴+글자라벨, 파랑/주황/초록 팔레트, strip 색+글자) ⑤ 에너지 곡선 강조(굵은 파랑)·thr/auto 보조(흐림) ⑥ rise_not_found 안내 + SEARCH 밖 onset 지정 허용(경고만). 기존 기능·Export(csv/json) 스키마·localStorage `_v1` 유지. read-only(데이터·plot png·동결파일·manifest 무수정, 도구 HTML+신규 파생물만). 곡선은 HTML 임베드라 file:// 더블클릭으로 표시(서버 불필요). **진규 시각검수 완료 — 6개 요구사항 반영 확인.** 검수 판정 자체는 진규가 도구로 진행 → `review_decisions.csv` Export → v2 manifest.
-- **Status:** confirmed design / Gate 1·2 detector 기준 확정 + onset_manifest **v1_auto_reviewed** 생성(clean subset: auto_reviewed 214 usable / pending_manual 135 / excluded 11). **detector criteria confirmed; v1은 clean subset이며 final onset_manifest 아님 — pending_manual 135(WALK 68)은 진규 검수 후 v2에서 확정, provisional onset median 132.5(~131)도 v2 재계산.** Pending: pending_manual 수동 검수(priority queue 115, train/val 98), final onset_manifest(v2), final onset median/re-alignment point, WALK baseline contamination(수동검수 수용), 항목 4 crop alignment(auto_reviewed로 provisional 착수 가능·WALK 편향 주의), Gate 3 cache builder.
+### [D-031 추가] onset_manifest v2 수동 검수 완료 및 항목4 alignment 설계 확정
+- **Date:** 2026-06-06
+- **Decided by:** user / codex / claude-ai
+- **Content:**
+  - 진규가 onset_manifest v1 pending manual 115개 검수를 완료했고, `manifest_v2_manual_augmented` 기준으로 crop 방식별 usable flag를 확정한다.
+  - fixed 정책은 `usable_for_fixed=True`인 349/360 세션을 유지한다. `onset_unusable` 세션은 fixed crop에서 제외하지 않으며, `data_invalid` 11개만 전체 정책에서 제외한다.
+  - onset-aligned 정책은 `usable_for_onset_aligned=True`이고 crop 범위가 clean400 안에 들어오는 세션만 사용한다. 수동 onset이 있어도 crop이 clean400 밖이면 clamp하지 않고 `crop_out_of_bounds`로 onset-aligned coverage에서 별도 집계한다.
+  - median fallback/imputation은 사용하지 않는다. 제외 세션의 onset은 null로 유지한다.
+  - 항목4 메인 비교는 non-WALK pooled paired comparison으로 수행한다. 같은 세션에서 `fixed=clean[50:350]`와 `onset_primary=clean[onset-50:onset+250]`를 비교한다. 두 crop은 모두 onset 기준 `-50:+250` 구조이며, 차이는 명목 onset 100 정렬과 실제 수동 onset 정렬뿐이므로 순수 alignment effect를 검증한다.
+  - optional post amount ablation으로 `onset_reduced=clean[onset-100:onset+200]`를 생성한다. 메인 결론이 아니라 post-fall 정적 단서 의존 감소 확인용 보조 실험이다.
+  - single-crop 실험이므로 overlap 정책은 `not_applicable`로 기록한다. multi-window stride/overlap은 후속 확장 시 별도 결정한다.
+  - 보고는 paired alignment effect와 coverage/inclusion rate를 분리한다. WALK는 fixed 주력, onset-aligned는 pooled exploratory로 보고하며 inclusion/exclusion/crop_out_of_bounds rate를 반드시 명시한다.
+  - 주요 지표는 event recall, forward recall, late_tp, FAR, first-fire latency median/p90, timely_3s/timely_4s이며 F1은 보조 지표로 둔다. 통계는 paired bootstrap CI, fire/no-fire McNemar, 단일 비율 Wilson CI를 사용한다.
+  - test split은 설계, threshold, crop 통계 결정에 사용하지 않고 봉인한다.
+  - **검수 발견 (정성, 항목4 해석 근거):**
+    - WALK는 onset-aligned 부적합 (구조적). 검수 제외 사유 1위는 walking_residual(6개)이 아니라 no_clear_transient(43개) — WALK는 "걷기가 가려서"가 아니라 "낙상 transient 신호 자체가 약하거나 묻혀서" onset을 못 잡음. 게이트 1·2부터 5번째 일관 확인.
+    - SIT는 완만한 낙상: 앉다 스르륵 무너져 신호가 STD(급격한 단발)와 달리 완만하게 솟음. 급격한 단발 없어도 baseline 위로 완만히 확실히 솟으면 낙상으로 판정. 낙상 종류별 신호 형태 차이.
+    - 환경/피험자 품질은 세션 단위 판정 (일괄 분류 금지): E4_S01/E1_S01은 세션마다 깨끗/시끄러움 편차 큼. low_quality_env_subject 9개는 전부 noise>1.206 세션(E2_S02 4, E4_S03 3, E4_S02 2), E1_S01/E4_S01 미포함 — 검수 초기 "E4_S01 저조" 인상은 환경 일괄 단정 오류로 정정. drift형 출렁은 noise_ratio로 안 잡히니 육안 병행.
+  - **v2 usable N:** usable_for_fixed 349/360, usable_for_onset_aligned 264/360 (auto 214 + manual 50). non-WALK pooled train+val 148 → 항목4 메인 paired 비교 가능. subtype onset-aligned 전부 20+ (WALK_F 39/WALK_B 37/SIT_F 46/SIT_B 40/STD_F 51/STD_B 51).
+  - **검수 분포:** 115개(high 98 + normal 17) = 확정 50(modify 43/approve 7) / 제외 65. onset_status: auto_reviewed 214, manual_corrected 50, onset_unusable 65, pending_manual 20, data_invalid 11.
+  - **final onset median (clean, imputation 없음):** overall 134.0 (manual 150.0/auto 132.5). by_subtype WALK_B 120.0 / SIT_B 130.5 / SIT_F 132.5 / WALK_F 136.5 / STD_F 142.0 / STD_B 144.0. by_split train 130.0 / val 143.0 / test 134.0.
+- **Status:** confirmed
+- **Status:** Gate 1·2 완료, onset_manifest v2 확정(검수 115개 반영). 항목4 alignment 설계 확정 → Gate 3 cache builder 진행 예정. Pending: cache builder(fixed/onset_primary/onset_reduced), 항목4 paired 비교(non-WALK pooled 메인), event-level 평가.
 
 ---
 
