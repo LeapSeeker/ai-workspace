@@ -521,6 +521,21 @@ non-fall 생성기 `nonfall_quality_report` 의 `sanity_max_abs_diff`(재생성 
 
 ## Review Notes
 
+### 2026-06-08 — 추론 파이프라인 데모 정비 (졸업 직결) (claude-code / codex)
+
+- **배경:** 서버 추론 경로에 임시 track1 모델(`checkpoints_track1_formal_global_s43/best_operating.pt`), threshold 0.5, 기존 서버 판정식 불일치, energy gate 없음 상태가 남아 있었고, 정적·다인 환경에서 fall 오발이 확인됐다. 원인은 도메인 갭(Alsaify/track1 mismatch) + 환경 노이즈로 본다. 데모 환경은 통제 예정이나, 통제 후에도 정적 오발이 지속되면 졸업 직결 리스크다.
+- **핵심 정합성 버그:** 학습 평가의 `predict_with_fall_threshold()`는 `fall_prob >= threshold`이면 argmax와 무관하게 fall로 강제하지만, 기존 서버 판정은 사실상 `argmax == fall AND fall_confidence >= threshold`였다. 따라서 항목4/후속 평가에서 고른 threshold가 서버에서 같은 의미로 동작하지 않았다. `server/inference/predictor.py`는 `raw_is_fall = fall_conf >= self.threshold`로 정렬해 argmax 조건을 제거했다. 이 변경은 기본 동작을 의도적으로 바꾸는 버그 수정이며 토글 뒤에 숨기지 않는다.
+- **fall alert confidence 정렬:** 판정식 정렬 후에는 argmax class가 non-fall이어도 `is_fall=True`가 가능하므로, `server/main.py::handle_inference_result()`에서 Pi4/SMS fall alert confidence는 argmax confidence가 아니라 `fall_confidence`를 우선 전달하도록 정렬했다.
+- **다층 방어:** fine-tuned 모델 교체(`SAFESIGNAL_MODEL_PATH`), 평가 운영점 threshold 주입(`SAFESIGNAL_FALL_THRESHOLD`), SDP energy gate(`SAFESIGNAL_ENERGY_GATE_ENABLED/THRESHOLD/METRIC`), N consecutive(`SAFESIGNAL_FALL_CONSECUTIVE_N`), 환경 통제를 함께 사용한다. 기본값은 기존 E2E 보존 방향으로 유지한다(model path=track1 임시 모델, threshold=0.5, energy gate off, N=1, stride=100 유지).
+- **energy helper 단일화:** `server/inference/energy.py::compute_window_energy()`를 새로 두고 predictor와 calibration 도구가 같은 helper를 import한다. 정의는 `debug/preprocessing/analyze_sdp_energy.py`와 같은 z-score 직전 SDP metric이다(`rpca_sparse -> stacked_doppler_profile -> sdp_mean_abs/sdp_fro/sdp_std/sdp_max_abs/sparse_ratio/raw_std/raw_delta_mean`). 동일 window 기준 helper/predictor/analyze 경로 maxdiff 0을 검증했다.
+- **energy gate / calibration:** energy gate는 실제 데모 경로인 `FallPredictor.predict()` 내부, 모델 호출 전에 적용된다. low-energy skip 시 `class=non_fall_energy_gate`, `confidence=0.0`, `fall_confidence=0.0`, `raw_is_fall=False`, `is_fall=False`로 반환하고 skip/pass counter를 result에 담는다. `debug/inference/calibrate_energy_gate.py`를 추가해 오늘 정적 측정 1차와 데모 당일 시연장 정적 측정 2차를 같은 절차로 돌릴 수 있게 했다. 기본 후보는 static p99 * 1.2이며, `--fall-patterns "*FALL*.csv"`로 기존 fall energy p5와 비교해 threshold가 fall p5보다 낮은지 확인한다.
+- **replay / 검증 도구:** `debug/inference/replay_static_csv.py`는 `SlidingWindowBuffer + FallPredictor` 실제 서버 추론 경로로 `NO_MOTION/STAND/LIE` CSV를 replay해 raw fall/final fall/energy skip 수를 확인한다. calibration 도구는 모델 추론 없이 energy 분포 p50/p90/p95/p99/max와 PowerShell env 설정 예시를 출력한다.
+- **검증 완료:** py_compile, `server/inference/_selfcheck.py` ALL_OK, checkpoint strict load(classes=`fall,walking,sit_stand,lying,standing,picking`, fall index `(0,)`), 전처리 동일성(maxdiff 0), 판정식 smoke(argmax walking이어도 fall_confidence>=threshold면 raw_is_fall True), alert confidence smoke, energy gate 강제 skip, N=2 env 반영, replay smoke, calibration smoke를 통과했다.
+- **stride / 평가-데모 간극:** 서버 stride는 100으로 유지한다. 학습/항목4 평가는 event-level 및 stride 50 조건을 포함할 수 있으므로, 데모 기대치는 서버 조건(stride 100, 선택한 threshold, energy gate, N setting) replay/라이브로 재측정해야 한다. 평가 수치를 데모 기대치로 그대로 쓰지 않는다.
+- **합격 기준:** 정적 CSV replay 0 발화 -> E3 라이브 정적 5~10분 무발화 -> fall 리허설 정량 합격선(N회 중 X회, 권장 5회 중 4회 이상 등 사용자 확정) 통과. 정적 0건만으로는 충분하지 않고, fall이 잡히는지도 반드시 함께 본다. energy threshold는 E3 baseline 기반으로 최종 조정한다.
+- **백업/롤백:** 코드 수정 전 `backup/inference-demo-prechange` 브랜치와 `debug/inference/pre_claude_backup/` patch/status/bak 파일을 만들었고, backup 디렉터리는 `.git/info/exclude`로 커밋 제외했다. 코드 repo 커밋 대상은 추론 정비 파일만이며, `debug/modeling/onset_sparse_energy_diag.py`, backup, smoke json, `__pycache__`는 제외한다.
+
+
 ### 2026-06-08 — 항목4 후속 후보 triage + 비낙상 포함 균형 증강 실험 계획 (claude-ai / codex)
 
 - **배경:** 항목4 onset 정렬 검증(D-031: FAR 유의 감소 Delta -0.139 [-0.191,-0.091], recall 비유의 Delta -0.015, 절대목표 R>=0.85 & FAR<=0.15 미달, 병목=모델/데이터 capacity)과 더미 4-arm(fall-only 더미의 FAR 악화는 class-ratio artifact, fall mass 통제 후 더미 효과 null, within-subject in-domain, N=27 under-powered) 이후 재시도 가치 있는 후보를 triage했다.
