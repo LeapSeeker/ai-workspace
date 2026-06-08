@@ -1,9 +1,111 @@
 ﻿# SafeSignal Project State
 
-_Last updated: 2026-06-08 (비낙상 포함 balanced 증강 실험 스크립트 작성·정적검증 완료, 2026-06-09 학교 PC 실행 대기 — 상단 NEXT ACTION 런북; codex Q1~Q6 설계잠금 Review Notes 반영; D-031 onset-aligned/4-arm + onset 검수도구 v2) | Updated by: claude-code_
+_Last updated: 2026-06-09 (데모 머신 RTX4060/i5-13500HX 실시간 추론 병목 해소 Phase 0~4 실행계획 반영; Phase 1 baseline 후 Phase 2 범위 결정; RPCA multiprocessing/max_iter sweep/threshold 운영점 순서 확정) | Updated by: codex_
 
 ---
 
+## ▶ NEXT ACTION (2026-06-10 데모 머신 실시간 추론 병목 해소) — Phase 0+1부터 시작
+
+> 데모 머신: 팀원 노트북 RTX4060 / i5-13500HX / 64GB RAM.
+> 목표: CPU RPCA 병목으로 인한 stall·pair drop·gap garbage를 제거하고, 같은 운영점으로 replay/라이브 데모를 검증한다.
+> 원칙: 모델 재생성 없음(D s42, git f186764). shadow/pre-gate/warm-start 신규 구현은 후순위. 각 Phase 종료 후 보고·멈춤. 충돌, 수동 변경, 품질 저하는 자동 진행하지 말고 보고한다.
+
+### Phase 0) 환경 정합 — 측정 전제
+
+1. `git status --short`, branch, 최근 log로 gate1 최신(`f186764`) 여부 확인.
+   - git에 없는 수동 변경 파일이 있으면 멈추고 보고. 덮어쓰지 않는다.
+   - 최신이 아니면 `git pull`; 충돌 시 자동 머지 금지, 멈추고 보고.
+2. D s42 checkpoint 확인:
+   - `model/finetune/checkpoints_item4_balanced/onset_primary_balanced_aug_s42/best_operating.pt`
+3. E3/E4 정적/fall CSV 확인: `data/cleaned`.
+4. CUDA 확인: `torch.cuda.is_available() == True` 및 GPU명 RTX4060. False면 CUDA PyTorch 설치 필요로 보고.
+5. 운영 env 확인:
+   - `SAFESIGNAL_FALL_CONSECUTIVE_N=1` (N=2는 낙상 단발 transient를 죽여 폐기)
+   - `SAFESIGNAL_ENERGY_GATE_ENABLED=False` (SDP energy gate는 낙상/정적 분리 실패로 폐기)
+   - `SAFESIGNAL_INFERENCE_STRIDE=100`
+   - `SAFESIGNAL_MODEL_PATH`는 D s42 checkpoint
+   - energy gate, shadow/pre-gate가 켜져 있으면 끄고 보고. 새 pre-gate 구현은 하지 않는다.
+
+### Phase 1) 베이스라인 측정 — 최대 분기점
+
+CSV replay로 짧게 측정 후 보고·멈춤.
+
+- warm-up 3회 제외 후 20~30 window 측정.
+- `compute_window_energy`/RPCA ms, CNN ms, full predict ms 각각 mean/p50/p95 기록.
+- CUDA 측정 시 CNN 전후 `torch.cuda.synchronize()`로 비동기 시간을 보정.
+- 같은 replay window set을 이후 max_iter/tol 품질 비교에도 고정한다.
+
+판정:
+
+- RPCA 200에서 p95 <= 1.5s: 구조 변경 최소화, Phase 2 스킵/최소화 가능.
+- p95 1.5~3s: CUDA CNN + RPCA max_iter/tol 조정.
+- p95 > 3s: max_iter/tol + multiprocessing 풀세트 검토.
+
+### Phase 2) stall 해결 — 2-A 단일 latency, 2-B throughput
+
+#### 2-A. 비병렬 단일 latency p95 <= 1.5s 목표
+
+1. CUDA CNN 사용으로 CNN 병목 제거.
+2. RPCA `max_iter` sweep: `200 -> 180 -> 160 -> 150`, 필요 시 `120 -> 100`까지 확장.
+   - 선택 기준은 latency 최저가 아니라 replay recall/FAR 유지되는 최속값.
+   - 학습은 200 기준이므로 추론 `max_iter` 축소는 분포 차이 리스크를 품질로 확인한다.
+3. 부족 시 `tol` 완화 sweep 추가.
+   - 현 기본은 `1e-7 * ||D||_F`로 실시간 추론에는 과엄격할 수 있음.
+   - `1e-6`, `1e-5` 계열 후보를 같은 window set으로 비교.
+4. warm-start는 후순위. 현재 API 없음, 병렬과 충돌, 분포 리스크가 있어 데모 우선 적용 대상 아님.
+
+#### 2-B. multiprocessing으로 throughput >= 1 win/s 및 1s 근접
+
+worker 생성 전 BLAS thread 제한:
+
+```powershell
+$env:OMP_NUM_THREADS="1"
+$env:MKL_NUM_THREADS="1"
+$env:OPENBLAS_NUM_THREADS="1"
+$env:NUMEXPR_NUM_THREADS="1"
+```
+
+- window 단위 RPCA multiprocessing: workers `2 -> 3 -> 4`만 실측. 5+는 SVD/BLAS 경합 가능성이 커서 비추천.
+- 각 window에 `window_id`, `start_ts`, `end_ts`를 붙여 전처리 worker로 전달.
+- 결과는 `window_id/end_ts` reorder buffer에서 정렬 후 CNN에 전달.
+- bounded queue로 backlog/drop 방지.
+- 너무 오래된 out-of-order 결과는 discard하되 로그는 남긴다. N=1 운영이라 알림 순서 의존은 낮지만 로그 해석에는 중요하다.
+
+제외: joint PCA, RPCA 알고리즘 전체 교체, energy/pre-gate 신규 구현.
+
+### Phase 3) threshold 운영점 확정 — 0.5 고정 금지
+
+stall 해결 후 첫 작업.
+
+1. replay fall 60 window의 `fall_conf` 분포 확인.
+   - `>0.5` 수, `0.15~0.5` 수, subtype별 약한 구간(SIT_F, S02 등) 확인.
+2. threshold sweep: `0.3`, `0.4`, `0.5` 각각 replay recall/FAR/F1 산출.
+   - 기존 `0.05`, `0.15` 값은 비교 후보로만 둔다.
+3. 선택 기준: demo recall 합격선을 유지하는 가장 높은 threshold(FAR 최소).
+   - replay와 라이브 데모가 같은 threshold를 쓰도록 확정한다.
+
+### Phase 4) 라이브 데모 검증
+
+RTX4060 + ESP32 라이브, Phase 3 threshold 사용.
+
+1. 낙상 5회: 4~5/5 감지 목표.
+2. 정적 1~2분: 오발 빈도 확인.
+3. 부족하면 threshold 미세조정. 최종 기준은 replay 수치와 live 검증을 함께 기록한다.
+
+### 보존 / 산출물
+
+- 각 Phase 산출물(베이스라인, max_iter/tol sweep, conf 분포, threshold 평가, live 결과)을 디스크 저장.
+- 코드 변경은 config/env 토글 우선, 변경 전 백업.
+- 전체 종료 후 커밋·푸시. `--force` 금지. 대용량 산출물은 git 추적 여부 별도 판단.
+
+### Codex 보강 메모
+
+- Phase 1이 최대 분기점이다. RTX4060에서 RPCA 200 p95가 이미 1.5s 근처면 풀세트 최적화로 들어가지 않는다.
+- max_iter 선택은 latency가 아니라 recall/FAR 유지되는 최속값 기준이다.
+- multiprocessing 성패는 BLAS thread=1 제한에 달려 있다.
+- Phase 1/2 품질 비교는 같은 replay window set으로 수행해야 한다.
+
+---
 ## ▶ NEXT ACTION (2026-06-09 새 환경 즉시 실행 런북) — 비낙상 포함 balanced 증강
 
 > 새 환경(재부팅 시 C 초기화)에서 "ai-workspace state 참고해서 더미데이터 생성 및 학습 진행해줘"
@@ -1133,6 +1235,8 @@ non-fall 생성기 `nonfall_quality_report` 의 `sanity_max_abs_diff`(재생성 
   - 현재 raw 수집 데이터가 적으므로 E4/E1 데이터를 threshold 전용 validation/test로 크게 분리하지 않는다. 가능한 raw 데이터는 학습/평가 후보로 보존하고, 증강은 train split에만 적용한다.
   - 시연 후보 환경에서 시간이 남으면 낙상 동작을 각 유형별로 추가 10회 수집하는 방안을 검토한다. 이 추가 수집분은 모델 재학습 또는 demo threshold sanity check에 활용할 수 있다.
 - 다음 액션: E4 본수집 완료 후 NO_MOTION 수집 전 시간 여유를 확인하고, 추가 낙상 수집 여부를 결정한다.
+
+
 
 
 
