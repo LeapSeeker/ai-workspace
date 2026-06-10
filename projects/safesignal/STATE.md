@@ -1,6 +1,18 @@
 ﻿# SafeSignal Project State
 
-_Last updated: 2026-06-09 (데모 머신 RTX4060/i5-13500HX 실시간 추론 병목 해소 Phase 0~4 실행계획 반영; Phase 1 baseline 후 Phase 2 범위 결정; RPCA multiprocessing/max_iter sweep/threshold 운영점 순서 확정) | Updated by: codex_
+_Last updated: 2026-06-10 (stride 150/RPCA max_iter 100 라이브 검증, cooldown chain, RPi 2.4GHz WiFi 간섭 리스크 및 데모 운영값 반영) | Updated by: codex_
+
+---
+
+## ▶ NEXT ACTION (2026-06-10 데모 직전 운영 잠금) — RPi WiFi 간섭 차단 후 재검증
+
+> 현재 데모 운영 후보는 `SAFESIGNAL_INFERENCE_STRIDE=150`, `SAFESIGNAL_RPCA_MAX_ITER=100`, `SAFESIGNAL_FALL_THRESHOLD=0.30`, `SAFESIGNAL_FALL_CONSECUTIVE_N=1`, `SAFESIGNAL_ENERGY_GATE_ENABLED=False`, `SAFESIGNAL_CONF_DIAG=1`, `COOLDOWN_SEC=10`이다. 코드 기본값은 여전히 보수적으로 stride 100 / RPCA 200 / threshold 0.50 / cooldown 30을 유지하므로, 데모 실행 스크립트 또는 쉘 env로 반드시 주입한다.
+
+1. RPi4는 데모 환경에서 2.4GHz WiFi를 사용하지 않는다. 우선순위는 유선 Ethernet, 그 다음 5GHz 전용, 마지막 WiFi off다.
+2. RPi WiFi 차단 후 정지 1분을 재측정한다. 합격 기준: `sdp_mean_abs`가 정지1 수준(0 근처)으로 복귀하고 FALL 0건.
+3. 같은 설정에서 "정지 후 낙상" 리허설을 수행한다. 목표는 쿨다운이 비어 있는 상태에서 알림 +1~3초. 오발이 먼저 발생하면 10초 이상 대기 후 낙상 시연한다.
+4. STEP 1 잔여 검증: measurement 경로와 서버 predict 경로의 같은 window set `fall_conf` A/B 비교를 완료한다. 현재는 warm-up 후 서버 predict latency 2315ms WARN 1회만 기록되어 경로 정합 검증이 닫히지 않았다.
+5. 정지2 오발 1건(낙상5 종료 36초 후 conf≈0.83)은 `SAFESIGNAL_CONF_DIAG`의 `win_ts_us`, `d_ts_us`, `top_class`, `sdp_mean_abs`로 원인을 확인한다.
 
 ---
 
@@ -623,6 +635,21 @@ non-fall 생성기 `nonfall_quality_report` 의 `sanity_max_abs_diff`(재생성 
 
 ## Review Notes
 
+### 2026-06-10 — stride 150 라이브 검증 / cooldown chain / RPi WiFi 간섭 정리 (Codex)
+
+- **대조 범위:** 사용자 제공 체크리스트를 기준으로 하되, 코드 반영 여부는 현재 `wifi-csi-fall-detection` repo에서 확인했다. 현재 HEAD는 `e19122f`이며, 직전 관련 커밋은 `0c94faa`(`SAFESIGNAL_CONF_DIAG`)와 `0819d16`(log_fall confidence, index dashboard, RPi callback 복원, RPCA env 토글)이다. 미추적 로컬 파일 `debug/inference/e4_static_calib.json`, `debug/modeling/onset_sparse_energy_diag.py`, `server/run_server.ps1`는 머신별/진단용으로 이번 STATE 판단에서 제외한다.
+- **성능 병목 및 RPCA 최적화:** RTX4060/i5-13500HX 기준 병목은 CPU RPCA로 확정됐다. CNN은 GPU에서 약 4.4ms 수준이고, full predict p95는 RPCA `max_iter` 200에서 3279ms, 100에서 1478ms로 약 2.1배 개선됐다. 품질 영향은 미미한 것으로 기록하되, 서버 predict 경로 warm-up 후 latency 2315ms WARN 1회만 남아 있고 measurement 경로와 서버 predict 경로의 `fall_conf` A/B 비교는 미완료다.
+- **코드 반영 확인:** `server/inference/config.py`에 `SAFESIGNAL_RPCA_MAX_ITER` env가 있고, `server/inference/predictor.py`는 `compute_window_energy(window, rpca_max_iter=RPCA_MAX_ITER)`로 전달한다. `server/main.py`에는 `SAFESIGNAL_CONF_DIAG` CSV 로깅과 `COOLDOWN_SEC` env가 있으며, `server/logger/log_manager.py::log_fall()`은 `[FALL] ... conf=0.xxxx`를 출력한다. 단 코드 기본값은 `INFERENCE_STRIDE=100`, `FALL_THRESHOLD=0.5`, `RPCA_MAX_ITER=200`, `COOLDOWN_SEC=30`이므로 데모값은 env로 주입해야 한다.
+- **stride 150 결론:** stride 100에서 drop 53,901건이 발생했으나 stride 150으로 변경한 뒤 drop 0건으로 해소됐다. 추론 간격 중앙값 1510ms는 이론값 1500ms와 일치했고, p95 2773ms, 2초 초과 16%가 기록됐다. drop이 0이므로 multiprocessing Phase 2-B는 구현하지 않고 보류한다. 설계안은 RPCA worker pool(workers=2부터), BLAS thread=1, reorder buffer, CNN 단일 프로세스, `SAFESIGNAL_RPCA_WORKERS` 토글 구상으로만 남긴다.
+- **threshold / checkpoint 정합:** 사용 checkpoint의 저장 threshold는 0.30으로, 서버 config 기본 0.50과 불일치한다. checkpoint val metrics는 window-level 기준 recall 0.808 / FAR 0.010 / F1 0.824(threshold 0.30)다. Phase 3 replay(stride 100)는 file-level recall 0.567, event-window recall 0.228로 낮지만, 3초 파일 stride 100 replay는 낙상 window가 1개뿐이고 timing 정의가 라이브 연속 sliding과 어긋난다. 따라서 replay event-window recall 0.228과 라이브 낙상 감지는 모순이라기보다 평가 조건 차이로 해석한다.
+- **subtype / cross-subject 약점:** fall window miss 26파일은 모두 `event_window_absent=0`, `low_conf=26`으로, 측정 한계보다 cross-subject 약점으로 본다. subtype별 라이브/분석 약점은 SIT_B(0.40)와 WALK_F(0.40), 상대 강점은 WALK_B/STD_B(0.70)다. 라이브 낙상 5회에서는 4/5 감지했고, SIT_B는 max_conf 0.3697로 threshold 바로 아래에서 미감지됐다.
+- **라이브 검증 결과(2.4GHz RPi 간섭 전):** stride 150 / RPCA max_iter 100 / threshold 0.30 / N=1 / energy gate off / CONF_DIAG on 조건에서 정지1 1분은 오발 0건, max conf 0.2499, `sdp_mean_abs` 0 근처로 안전했다. 이동 1분은 FALL 9건/41window(분당 9), top class는 fall 5 / sit_stand 4로 일상 이동 오발이 크다. 낙상 5회는 WALK_B O(log 0.6284/max 0.8085), STD_B O(0.4193/0.7207), SIT_B X(max 0.3697), WALK_F O(0.4787/0.7050), 자유 O(0.3773/0.6752)다.
+- **threshold로 이동 오발 제거 불가:** 낙상 max conf 범위(약 0.675~0.808)와 이동 오발 max conf(0.7257)가 겹친다. threshold 상향만으로 이동 오발을 제거하면 실제 낙상도 같이 죽을 위험이 크다. N=2, energy gate, sit_stand 제외, confidence 상향은 각각 recall 손상 또는 argmax/fall_conf 구조상 위험해 데모 운영 기본값에서 폐기한다.
+- **cooldown chain 문제:** 이동 오발이 30초 cooldown을 먼저 트리거하면 직후 실제 낙상 알림이 낙상1 +55초, 낙상2 +43초처럼 지연될 수 있다. raw 낙상 감지는 1~6초로 빠르므로 알림 지연의 주원인은 모델 미감지가 아니라 cooldown chain이다. `COOLDOWN_SEC=10`을 데모 운영값으로 낮춘다. 낙상 cooldown 예외/bypass는 모델이 진짜 낙상과 오발을 구분하지 못하고 confidence도 겹치므로 위험하다고 판단한다.
+- **RPi 2.4GHz WiFi 간섭:** 정지1에서는 오발 0건이었으나, RPi가 2.4GHz WiFi에 붙은 상태에서는 정지 중에도 max conf 0.9370, FALL 76/249(30.5%)가 발생했다. `sdp_mean_abs`가 0.006~0.039로 상시 배경 에너지를 보였으므로 간헐 잡음이 아니라 RPi WiFi 비콘/데이터 전송이 ESP32 CSI를 교란하는 배경 에너지로 본다. 데모에서는 RPi를 유선 Ethernet, 5GHz 전용, 또는 WiFi off로 고정해야 한다.
+- **데모 운영 결론:** 멀티프로세싱은 drop 0 상태라 불필요하고 구조 변경 리스크가 더 크다. 운영값은 stride 150 / max_iter 100 / threshold 0.30 / N=1 / energy gate off / CONF_DIAG on / COOLDOWN_SEC 10. 시연은 "정지 후 넘어지기"로 구성하고, subtype은 WALK_B / STD_B / WALK_F 위주로 한다. SIT_B는 약점으로 제외한다. 오발이 발생하면 10초 이상 대기 후 낙상을 시연한다. RPi 2.4GHz WiFi 차단은 필수 조건이다.
+- **근본 한계:** 이동 오발(분당 9건)은 cross-subject 약점이며 재학습 없이 후처리만으로 해결하기 어렵다. 근본 대응은 S03 정상 이동 데이터 포함 재학습이지만, 데모 직전에는 cache/학습/평가/threshold 재검증을 다시 열기 때문에 발표 후 개선 또는 비상 후보로 둔다. 발표에는 이동 오발과 SIT_B 약점을 정직하게 포함한다.
+- **Status:** 데모 운영 설정은 env 기반으로 잠정 확정. RPi WiFi 차단 후 정지 1분 재측정, cooldown 10초 리허설, measurement-vs-server `fall_conf` A/B 검증은 아직 닫히지 않았다.
 ### 2026-06-08 — 추론 파이프라인 데모 정비 (졸업 직결) (claude-code / codex)
 
 - **배경:** 서버 추론 경로에 임시 track1 모델(`checkpoints_track1_formal_global_s43/best_operating.pt`), threshold 0.5, 기존 서버 판정식 불일치, energy gate 없음 상태가 남아 있었고, 정적·다인 환경에서 fall 오발이 확인됐다. 원인은 도메인 갭(Alsaify/track1 mismatch) + 환경 노이즈로 본다. 데모 환경은 통제 예정이나, 통제 후에도 정적 오발이 지속되면 졸업 직결 리스크다.
@@ -1147,6 +1174,11 @@ non-fall 생성기 `nonfall_quality_report` 의 `sanity_max_abs_diff`(재생성 
 
 ## Pending Items
 
+- [ ] RPi 2.4GHz WiFi 간섭 차단 후 정지 1분 재측정: 유선 Ethernet/5GHz/off 중 하나로 고정하고 `sdp_mean_abs` 0 근처 + FALL 0건 복귀 확인.
+- [ ] `COOLDOWN_SEC=10` 적용 후 "정지 후 낙상" 리허설: 오발 없는 상태에서 알림 +1~3초 목표, 오발 후에는 10초 이상 대기 후 재시연.
+- [ ] STEP 1 잔여: measurement 경로와 서버 predict 경로의 동일 window set `fall_conf` A/B 비교 완료. 현재는 서버 predict warm-up 후 latency WARN 2315ms 1회만 기록.
+- [ ] 정지2 오발 1건(낙상5 종료 36초 후 conf≈0.83) 원인 확인: `SAFESIGNAL_CONF_DIAG`의 `win_ts_us`, `d_ts_us`, `top_class`, `sdp_mean_abs` 대조.
+- [ ] 이동 오발 대응은 발표 후 S03 정상 이동 데이터 포함 재학습 후보로 보존. 데모 직전에는 N=2/energy gate/sit_stand 제외/conf 상향으로 해결하려 하지 않는다.
 - [ ] 일반 행동 추론 결과 저장 방식 결정 및 구현 (JSONL/CSV/SQLite 중 선택). Pi4 실시간 전송은 낙상 알림 전용으로 유지하고, non-fall 결과는 서버에 축적하여 1주일 단위 생활 패턴 감소 분석에 활용.
 
 - [x] WIFI_PS_NONE 적용 후 WALK 세션 재수집 → 페어 카운트 안정성 검증 (2026-05-12 완료. 8초 세션 570~652 페어, burst→idle 패턴 소멸. 700~800 목표는 미달이고 ~70Hz 천장 발견 → [D-018]로 처리)
@@ -1172,7 +1204,7 @@ non-fall 생성기 `nonfall_quality_report` 의 `sanity_max_abs_diff`(재생성 
 - [ ] ESP32 3대 배터리 런타임 정량화
 - [ ] GitHub 브랜치 전략 확정
 - [ ] 포터블 라우터 사용 가능 여부 확인
-- [ ] RTX4060에서 window_to_model_input() 단일 윈도우 latency 실측 → stride 최종 확정 (D-014 후속)
+- [x] RTX4060/i5-13500HX 실시간 추론 latency 실측 및 stride 운영값 갱신 (2026-06-10 완료: RPCA max_iter 200→100 full predict p95 3279ms→1478ms, stride 100 drop 53,901→stride 150 drop 0. 단 measurement-vs-server `fall_conf` A/B 비교는 별도 pending으로 남김)
 - [x] server/dongseok + feature/pretrained-model → main 브랜치 통합
 - [x] inference/ 모듈 구현 (InferenceWorker, 슬라이딩 윈도우 버퍼, 결과 큐)
 
@@ -1184,7 +1216,7 @@ non-fall 생성기 `nonfall_quality_report` 의 `sanity_max_abs_diff`(재생성 
 - [ ] 패킷 동기화 품질 후속 ([D-025] 잔여): ① `PAIR_TOLERANCE_US`는 아직 미변경 — 실측 pair_dt/gap 분포(p95/p99) 확보 후 재조정 판단. ② pair_dt/gap threshold·WARN/RECOLLECT 기준은 분포 확보 후 결정(현재 report-only, 저장 차단 미연결). ③ offline/realtime `max_gap_ms` skip/warn 정책 정렬은 후속.
 - [ ] 공유기/채널 고정 환경에서 pair rate, loss rate, max timestamp gap, pair delay 분포 재측정 후 핫스팟 대비 개선폭과 리샘플 필요성 재평가 ([D-026] 후속)
 - [x] 정식 pipeline 기준 z-score 전 SDP energy 분석 스크립트 추가 (2026-05-25, 코드 커밋 별도. `debug/preprocessing/analyze_sdp_energy.py` — load_safesignal_csv→resample_to_100hz→sliding_windows→rpca_sparse→stacked_doppler_profile까지 정식 경로 재현, z-score 직전 energy(sdp_mean_abs/fro/std/max_abs/sparse_ratio/raw_std/raw_delta_mean) + pair_dt/gap metadata 산출, 활동별 p50/p95/p99/min/max + no_motion p95/p99 초과비율, CSV/JSON 저장. E2 NO_MOTION 2파일 빠른 실행 검증 완료. 탐색용(max_iter=30, 300frame 균등샘플링) 대비 정식 경로에서 sdp_mean_abs 절대값이 다르게 나옴(p50 ≈0.027 vs 탐색 0.019) — 절대 threshold는 fall p5 확보 후 재산정 필요)
-- [ ] 실시간 추론에 z-score 전 SDP energy metadata 노출 (FALSE_POSITIVE_NOTES §7.10 후속, no_motion gate 사전작업): `window_to_model_input()`(model/preprocessing/pipeline.py)에 z-score 전 SDP를 옵션 반환하도록 확장 → `FallPredictor.predict()`(server/inference/predictor.py)가 sdp energy를 result dict에 포함 → `worker._inference_process`(server/inference/worker.py) result 통과 → `server/main.py` gate 판정에서 사용. buffer(server/inference/buffer.py)에는 gap/pair_dt quality metadata 보존 추가. fall 데이터 energy p5 확인 전 hard skip 금지(D-025/노트 §8.5).
+- [x] 실시간 추론에 z-score 전 SDP energy metadata 노출 (2026-06-10 확인: `server/inference/energy.py::compute_window_energy`, `FallPredictor.predict()` result의 `energy_gate.metrics`, worker timestamp 전달, `SAFESIGNAL_CONF_DIAG` CSV에 `sdp_mean_abs/raw_delta_mean` 기록. energy gate는 데모 운영에서 off 유지)
 
 ---
 
@@ -1235,6 +1267,9 @@ non-fall 생성기 `nonfall_quality_report` 의 `sanity_max_abs_diff`(재생성 
   - 현재 raw 수집 데이터가 적으므로 E4/E1 데이터를 threshold 전용 validation/test로 크게 분리하지 않는다. 가능한 raw 데이터는 학습/평가 후보로 보존하고, 증강은 train split에만 적용한다.
   - 시연 후보 환경에서 시간이 남으면 낙상 동작을 각 유형별로 추가 10회 수집하는 방안을 검토한다. 이 추가 수집분은 모델 재학습 또는 demo threshold sanity check에 활용할 수 있다.
 - 다음 액션: E4 본수집 완료 후 NO_MOTION 수집 전 시간 여유를 확인하고, 추가 낙상 수집 여부를 결정한다.
+
+
+
 
 
 
