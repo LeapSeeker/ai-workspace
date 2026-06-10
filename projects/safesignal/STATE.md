@@ -1,12 +1,12 @@
 ﻿# SafeSignal Project State
 
-_Last updated: 2026-06-10 (stride 150/RPCA max_iter 100 라이브 검증, cooldown chain, RPi 2.4GHz WiFi 간섭 리스크 및 데모 운영값 반영) | Updated by: codex_
+_Last updated: 2026-06-10 (데모 라이브 검증 후속: impact 미감지/정적 오탐/ESP32 외장 안테나 조건/handoff export 반영) | Updated by: codex_
 
 ---
 
 ## ▶ NEXT ACTION (2026-06-10 데모 직전 운영 잠금) — RPi WiFi 간섭 차단 후 재검증
 
-> 현재 데모 운영 후보는 `SAFESIGNAL_INFERENCE_STRIDE=150`, `SAFESIGNAL_RPCA_MAX_ITER=100`, `SAFESIGNAL_FALL_THRESHOLD=0.30`, `SAFESIGNAL_FALL_CONSECUTIVE_N=1`, `SAFESIGNAL_ENERGY_GATE_ENABLED=False`, `SAFESIGNAL_CONF_DIAG=1`, `COOLDOWN_SEC=10`이다. 코드 기본값은 여전히 보수적으로 stride 100 / RPCA 200 / threshold 0.50 / cooldown 30을 유지하므로, 데모 실행 스크립트 또는 쉘 env로 반드시 주입한다.
+> 현재 데모 운영값은 `SAFESIGNAL_INFERENCE_STRIDE=150`, `SAFESIGNAL_RPCA_MAX_ITER=100`, `SAFESIGNAL_FALL_THRESHOLD=0.30`, `SAFESIGNAL_FALL_CONSECUTIVE_N=1`, `SAFESIGNAL_ENERGY_GATE_ENABLED=False`, `SAFESIGNAL_CONF_DIAG=1`, `COOLDOWN_SEC=10`이다. 2026-06-10 후속 커밋에서 `server/inference/config.py`와 `server/run_server.ps1` 기본값도 데모값으로 정렬됐다. 단 운영 중 threshold/N/RPCA 변경은 반드시 `server/logs/run_config_*.json`으로 실제 적용값을 확인한다.
 
 1. RPi4는 데모 환경에서 2.4GHz WiFi를 사용하지 않는다. 우선순위는 유선 Ethernet, 그 다음 5GHz 전용, 마지막 WiFi off다.
 2. RPi WiFi 차단 후 정지 1분을 재측정한다. 합격 기준: `sdp_mean_abs`가 정지1 수준(0 근처)으로 복귀하고 FALL 0건.
@@ -635,6 +635,21 @@ non-fall 생성기 `nonfall_quality_report` 의 `sanity_max_abs_diff`(재생성 
 
 ## Review Notes
 
+### 2026-06-10 — 데모 라이브 후속: impact 미감지 / 정적 오탐 / 장비 지향성 / handoff export (Codex)
+
+- **코드/운영값 정정:** 2026-06-10 후속 코드 기준 `server/inference/config.py`와 `server/run_server.ps1`는 데모 운영값을 기본으로 정렬했다. 현재 기준값은 stride 150, RPCA max_iter 100, threshold 0.30, N=1, energy gate off, `SAFESIGNAL_CONF_DIAG=1`, `COOLDOWN_SEC=10`이다. 직전 디버그 커밋은 `server/main.py`에 `conf_diag_*.csv`, `fall_decision_*.csv`, `run_config_*.json` 기록을 추가하고 `cooldown.check_and_update()` 상태를 기록하도록 확장했지만, model input/RPCA/SDP/threshold/N/is_fall 판정식/Pi4 payload는 바꾸지 않았다.
+- **디버그 부하 영향 판단:** `conf_diag`는 매 window 1줄 CSV write+flush, `fall_decision`은 `is_fall=True` 후보만 write+flush, `run_config`는 시작 시 1회 write다. confidence 또는 판정값을 직접 바꾸지는 않는다. 다만 느린 디스크/백신/동기화가 끼면 `result_loop` 처리 시점이 약간 밀릴 수 있으므로, 장시간 실행 시 `fall_decision.wall_minus_win_ms`로 stale/backlog 여부를 확인한다. 데모 중 부하를 줄여야 하면 `SAFESIGNAL_CONF_DIAG=0`으로 끌 수 있지만 원인 분석 중에는 켜두는 편이 유리하다.
+- **알림 경로 해석:** 대시보드 알림과 Pi 음성이 거의 동시에 늦게 뜨는 경우, gTTS/오디오 지연보다는 서버가 `is_fall=True`를 늦게 만든 것으로 본다. 현재 알림 순서는 `update_fall()` → `rpi_connection.send_fall_alert()` → `send_fall_sms()`다. 대시보드가 먼저 뜨고 Pi 음성이 몇 초 늦는 경우에만 Pi TTS/오디오 경로를 1차 원인으로 본다. SMS는 동기 호출이라 다음 result 처리에는 영향을 줄 수 있으나 Pi 전송 호출 자체보다 뒤에 있다.
+- **실시간 낙상 실패 원인:** 팀원/학교 PC 라이브 분석에서 여러 테스트의 impact 주변 window는 존재했고, [2]/[3]/[5]/[6]은 `d_ts_us`도 대체로 1.5~1.9초로 정상 범위였다. 그럼에도 impact 직후 `fall_conf`는 약 0.0000~0.0020 수준이고, `top_class`는 standing/sit_stand/picking으로 나왔다. 12~17초 후 또는 86초 후 fire된 사례는 낙상 impact가 아니라 바닥 자세 변화/회복/일어나는 동작에 반응한 것으로 해석한다. 따라서 해당 케이스는 drop/cooldown/Pi 전달 지연보다 **모델/feature가 impact 순간을 낙상으로 일반화하지 못한 문제**가 지배적이다.
+- **정적 오탐 해석:** 19:35 static 테스트에서는 `fall_conf=0.4183`, `top_class=sit_stand`, `sdp=0.0095`인 threshold성 오탐과, 전후 window가 정상인데 `fall_conf=0.6966`, `top_class=fall`, `sdp=0.0114`로 순간 spike가 발생한 임펄스성 오탐이 분리됐다. 후자는 threshold만으로 차단하기 어렵고 N=2/K-of-M류 temporal aggregation 후보가 맞지만, 현재 실제 낙상 impact가 약하게 나오므로 데모 직전 N=2/K=5,M=3 같은 후처리는 recall을 더 죽일 위험이 크다. 현재 운영은 threshold 0.30/N=1 유지가 가장 보수적이다.
+- **장시간 서버 실행 리스크:** 서버를 오래 켤수록 정적 오탐이 잦아지는 관찰은 input_queue/result_queue backlog 또는 stale window 가능성을 시사한다. 현 구조는 3초 window를 stride 150(약 1.5초)마다 만들고, RPCA max_iter 100이 p95 약 1.5초 수준이므로 데모 머신보다 느린 노트북에서는 backlog가 다시 발생할 수 있다. 장시간 실행/개인 노트북 이전 후에는 `wall_minus_win_ms` 증가, `d_ts_us` 이탈, `[InferenceWorker] input_queue full` 로그를 우선 확인한다. 후속 개선 후보는 stale window discard와 RPCA latency 재측정이다.
+- **후처리 판단:** 현재 추론 단위는 프레임이 아니라 3초 sliding window이며 stride 150으로 약 1.5초마다 1회 예측한다. 즉 `FALL_CONSECUTIVE_N=2`는 최소 약 1.5초 추가 지연을 만들고, K=5/M=3은 약 7.5초 관찰창이 되어 데모 직전에는 과하다. 성공 낙상에서 `fall_conf >= 0.30`이 연속 2개 이상 확인되기 전에는 N=2를 최종 적용하지 않는다.
+- **ESP32/안테나 모델 정정:** 실제 보드는 `ESP32-S3-DEVKITC-1U-N8R8`로, 모듈은 `ESP32-S3-WROOM-1U-N8R8` 계열이다. `1U`는 PCB 안테나가 아니라 외장 안테나 커넥터 모델이다. 사용 안테나는 `PN-ANT-24U1` 2.4GHz 외장 안테나이며 공개 datasheet를 찾지 못했으므로 정확한 gain/radiation pattern은 단정하지 않는다. 일반 2.4GHz 외장 whip/rod 계열로 가정하면 안테나 축/편파/높이/주변 금속·케이블·Pi·노트북 배치가 CSI 관측 강도에 영향을 준다. 수집 때 안테나를 바닥과 수평으로 눕혀 가장 잘 됐다면 데모도 같은 배치를 유지하는 것이 분포 일관성 측면에서 우선이다. 발표 후에는 수직/수평 A/B와 링크 교차 방향 실험이 필요하다.
+- **subject/body-size 가설:** 부피가 큰 피험자의 낙상이 더 잘 잡히는 관찰은 CSI 기반 센싱에서 타당한 가설이다. 같은 E4 환경/S01·S02라도 체형, 링크 차폐 면적, 낙상 방향, TX-RX 링크 교차 정도가 `sdp_mean_abs/raw_delta_mean/fall_conf`를 바꿀 수 있다. 확인은 동일 위치/방향/속도에서 피험자별 impact `sdp_mean_abs`, `raw_delta_mean`, `fall_conf`, 감지 지연 비교로 한다.
+- **handoff export:** 팀원/학교 PC 산출물 export가 `handoff_export_20260610_222740.zip`으로 완료됐다. 기준 브랜치/커밋은 `feature/event-centered-gate1 / f186764`, 총 1,315 files, 원본 2.2GB, ZIP 1.5GB다. raw CSI(`data/**`, `server/data/raw`)와 `server/.env`는 제외됐고, `MANIFEST.csv`, `EXCLUDED.csv`, `MISSING_IMPORTANT_CANDIDATES.csv`, `SUMMARY.md`가 포함됐다. 이 ZIP은 코드 최신본 백업이라기보다 checkpoint/cache/eval/debug 산출물 보존본으로 보고, 새 PC에서는 최신 git pull 후 산출물을 같은 경로로 복원한다.
+- **재생성 가능성:** `debug/dummy_gen/out2/dummies_clean400.npz`는 `python debug/dummy_gen/dummy_generate.py`로, `debug/dummy_gen/balanced/nonfall_dummies.npz`와 `nonfall_lineage.csv`는 `python debug/dummy_gen/balanced/nonfall_dummy_generate.py`로 재생성 가능하다. balanced cache는 `item4_build_balanced_caches.py`, balanced checkpoint는 `item4_train_balanced.py`, balanced eval은 `item4_balanced_eval.py`로 재생성 가능하다. 단 오늘 라이브 `conf_diag/fall_decision/manual_events`는 실제 RF 환경/행동 순간에 종속되므로 동일 재생성 불가이며 새 실험으로 다시 수집해야 한다.
+- **Status:** 데모 직전에는 threshold 0.30/N=1/RPCA100/stride150/cooldown10을 유지하고, 성공한 낙상 방향·위치·속도와 RPi 5GHz/유선 조건을 고정한다. 발표 후 개선 우선순위는 stale-window discard, 실시간 latency 재측정, Pi TTS 캐시화, 안테나 방향·링크 교차 메타데이터 기반 재수집, 회복/일어남/picking hard negative 포함 재학습이다.
+
 ### 2026-06-10 — stride 150 라이브 검증 / cooldown chain / RPi WiFi 간섭 정리 (Codex)
 
 - **대조 범위:** 사용자 제공 체크리스트를 기준으로 하되, 코드 반영 여부는 현재 `wifi-csi-fall-detection` repo에서 확인했다. 현재 HEAD는 `e19122f`이며, 직전 관련 커밋은 `0c94faa`(`SAFESIGNAL_CONF_DIAG`)와 `0819d16`(log_fall confidence, index dashboard, RPi callback 복원, RPCA env 토글)이다. 미추적 로컬 파일 `debug/inference/e4_static_calib.json`, `debug/modeling/onset_sparse_energy_diag.py`, `server/run_server.ps1`는 머신별/진단용으로 이번 STATE 판단에서 제외한다.
@@ -1179,6 +1194,10 @@ non-fall 생성기 `nonfall_quality_report` 의 `sanity_max_abs_diff`(재생성 
 - [ ] STEP 1 잔여: measurement 경로와 서버 predict 경로의 동일 window set `fall_conf` A/B 비교 완료. 현재는 서버 predict warm-up 후 latency WARN 2315ms 1회만 기록.
 - [ ] 정지2 오발 1건(낙상5 종료 36초 후 conf≈0.83) 원인 확인: `SAFESIGNAL_CONF_DIAG`의 `win_ts_us`, `d_ts_us`, `top_class`, `sdp_mean_abs` 대조.
 - [ ] 이동 오발 대응은 발표 후 S03 정상 이동 데이터 포함 재학습 후보로 보존. 데모 직전에는 N=2/energy gate/sit_stand 제외/conf 상향으로 해결하려 하지 않는다.
+- [ ] 장시간 서버 실행 시 stale/backlog 진단: `fall_decision.wall_minus_win_ms`, `conf_diag.d_ts_us`, `[InferenceWorker] input_queue full` 로그를 기준으로 오래된 window가 정적 오탐처럼 표시되는지 확인하고, 발표 후 stale-window discard 정책을 설계한다.
+- [ ] ESP32-S3-DevKitC-1U-N8R8 + PN-ANT-24U1 기준 안테나 조건 실험: 수집 당시 수평 배치를 baseline으로 두고, 안테나 수평/수직, 링크 교차 방향(수직/평행/대각), 피험자 체형별 `sdp_mean_abs/raw_delta_mean/fall_conf`를 비교한다.
+- [ ] 낙상 impact 미감지 개선: E4/S01/S02에서 impact window가 존재해도 fall_conf가 0에 가까운 케이스를 subject·방향·속도·링크 통과 정도별로 분류하고, 회복/일어남/picking/sit_stand hard negative를 포함한 재학습 후보를 설계한다.
+- [ ] handoff export 복원 검증: 새 PC에서 최신 `feature/event-centered-gate1` pull 후 `handoff_export_20260610_222740.zip` 산출물을 원본 경로로 복원하고, 최종 checkpoint/cache/balanced eval 재실행 가능 여부를 확인한다.
 - [ ] 일반 행동 추론 결과 저장 방식 결정 및 구현 (JSONL/CSV/SQLite 중 선택). Pi4 실시간 전송은 낙상 알림 전용으로 유지하고, non-fall 결과는 서버에 축적하여 1주일 단위 생활 패턴 감소 분석에 활용.
 
 - [x] WIFI_PS_NONE 적용 후 WALK 세션 재수집 → 페어 카운트 안정성 검증 (2026-05-12 완료. 8초 세션 570~652 페어, burst→idle 패턴 소멸. 700~800 목표는 미달이고 ~70Hz 천장 발견 → [D-018]로 처리)
